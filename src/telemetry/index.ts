@@ -176,7 +176,20 @@ export interface TelemetryOptions {
   stderr?: (line: string) => void;
   /** Tests opt out so short-lived instances don't pile onto process 'exit'. */
   installExitHook?: boolean;
+  /**
+   * Consent when nothing decides (no env override, no stored choice).
+   * Upstream ships `true`; this fork's process singleton passes
+   * DEFAULT_TELEMETRY_ENABLED (`false`) — see below.
+   */
+  defaultEnabled?: boolean;
 }
+
+/**
+ * HP fork policy: telemetry is OFF unless the user turns it on
+ * (`codegraph telemetry on`, the installer toggle, or CODEGRAPH_TELEMETRY=1).
+ * Indexing proprietary code must never phone home by default.
+ */
+export const DEFAULT_TELEMETRY_ENABLED = false;
 
 // One process-level 'exit' listener for ALL instances (in practice: the
 // singleton) — N instances must not mean N listeners on process.
@@ -204,6 +217,7 @@ export class Telemetry {
   private counts = new Map<string, CountLine>();
   private events: EventLine[] = [];
   private readonly installExitHook: boolean;
+  private readonly defaultEnabled: boolean;
   private exitHookInstalled = false;
   private configCache: ConfigFile | null | undefined; // last observed identity, not a lifetime cache
   private intervalHandle: NodeJS.Timeout | null = null;
@@ -215,6 +229,7 @@ export class Telemetry {
     this.env = opts.env ?? process.env;
     this.writeStderr = opts.stderr ?? ((line) => process.stderr.write(line));
     this.installExitHook = opts.installExitHook ?? true;
+    this.defaultEnabled = opts.defaultEnabled ?? true;
   }
 
   // ---------------------------------------------------------------- consent
@@ -228,7 +243,8 @@ export class Telemetry {
 
   /**
    * Resolution order (first match wins) — keep in sync with TELEMETRY.md:
-   * DO_NOT_TRACK=1 > CODEGRAPH_TELEMETRY=0|1 > stored config > default on.
+   * DO_NOT_TRACK=1 > CODEGRAPH_TELEMETRY=0|1 > stored config > default
+   * (`defaultEnabled`: off for this fork's singleton).
    */
   getStatus(): TelemetryStatus {
     const config = this.readConfig();
@@ -248,7 +264,7 @@ export class Telemetry {
       if (!config.enabled) this.clearPending();
       return { enabled: config.enabled, decidedBy: 'config', machineId, configPath: this.configPath };
     }
-    return { enabled: true, decidedBy: 'default', machineId, configPath: this.configPath };
+    return { enabled: this.defaultEnabled, decidedBy: 'default', machineId, configPath: this.configPath };
   }
 
   isEnabled(): boolean {
@@ -623,6 +639,6 @@ export class Telemetry {
 let singleton: Telemetry | null = null;
 
 export function getTelemetry(): Telemetry {
-  if (!singleton) singleton = new Telemetry();
+  if (!singleton) singleton = new Telemetry({ defaultEnabled: DEFAULT_TELEMETRY_ENABLED });
   return singleton;
 }

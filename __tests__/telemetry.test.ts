@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { Telemetry, getTelemetry, TELEMETRY_ENDPOINT } from '../src/telemetry';
+import { DEFAULT_TELEMETRY_ENABLED, Telemetry, getTelemetry, TELEMETRY_ENDPOINT } from '../src/telemetry';
 
 type FetchCall = { url: string; body: Record<string, unknown> };
 
@@ -49,6 +49,28 @@ describe('Telemetry', () => {
 
   afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  describe('HP fork default (telemetry off unless opted in)', () => {
+    it('ships with the default turned off', () => {
+      expect(DEFAULT_TELEMETRY_ENABLED).toBe(false);
+    });
+
+    it('records, writes and sends nothing when nothing decides', async () => {
+      const t = make({ defaultEnabled: DEFAULT_TELEMETRY_ENABLED });
+      expect(t.getStatus()).toMatchObject({ enabled: false, decidedBy: 'default' });
+      t.recordLifecycle('index', { languages: ['go'] });
+      await t.flushNow();
+      expect(calls).toHaveLength(0);
+      expect(stderrLines).toEqual([]);
+      expect(fs.existsSync(t.configPath)).toBe(false);
+      expect(fs.existsSync(t.queuePath)).toBe(false);
+    });
+
+    it('still honours an explicit opt-in', async () => {
+      const t = make({ defaultEnabled: DEFAULT_TELEMETRY_ENABLED, env: { CODEGRAPH_TELEMETRY: '1' } });
+      expect(t.getStatus()).toMatchObject({ enabled: true, decidedBy: 'CODEGRAPH_TELEMETRY' });
+    });
   });
 
   describe('consent precedence', () => {

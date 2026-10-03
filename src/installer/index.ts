@@ -29,7 +29,7 @@ import type { AgentTarget, Location, TargetId } from './targets/types';
 import { watchDisabledReason } from '../sync/watch-policy';
 import { isGitRepo, isSyncHookInstalled, installGitSyncHook } from '../sync/git-hooks';
 import { getCodeGraphDir } from '../directory';
-import { getTelemetry, TELEMETRY_DOCS } from '../telemetry';
+import { DEFAULT_TELEMETRY_ENABLED, getTelemetry, TELEMETRY_DOCS } from '../telemetry';
 import { maybeOfferBetaSignup } from './beta-signup';
 
 // Backwards-compat: keep these named exports — downstream code may
@@ -182,14 +182,15 @@ export async function runInstallerWithOptions(opts: RunInstallerOptions): Promis
     autoAllow = false;
   }
 
-  // Step 4½: anonymous usage telemetry — a visible default-on toggle, asked
+  // Step 4½: anonymous usage telemetry — a visible toggle (default OFF in this
+  // fork, matching DEFAULT_TELEMETRY_ENABLED), asked
   // exactly once. Skipped when an env var (DO_NOT_TRACK / CODEGRAPH_TELEMETRY)
   // already decides, or when a previous run stored a choice — re-runs and
   // upgrades never re-ask.
   if (!useDefaults && getTelemetry().getStatus().decidedBy === 'default' && !getTelemetry().hasStoredChoice()) {
     const share = await clack.confirm({
       message: 'Share anonymous usage stats? (No code, paths, or names — see TELEMETRY.md)',
-      initialValue: true,
+      initialValue: DEFAULT_TELEMETRY_ENABLED,
     });
     if (clack.isCancel(share)) {
       // Don't kill the install over the telemetry question — leave it

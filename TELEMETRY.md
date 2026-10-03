@@ -1,5 +1,9 @@
 # Telemetry
 
+> **HP fork (`hp-tfg`)**: telemetry is **off by default** in this fork. Nothing is recorded or
+> sent unless you opt in (`codegraph telemetry on`, the installer toggle, or `CODEGRAPH_TELEMETRY=1`).
+> The rest of this page describes what upstream collects when telemetry is on.
+
 CodeGraph collects a small set of **anonymous usage statistics** — which commands and
 tools get used, which languages get indexed, which agents drive usage — so we can tell
 which of the 20+ languages and 8 agent integrations deserve the most work. This page is
