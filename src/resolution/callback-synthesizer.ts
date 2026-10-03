@@ -4118,6 +4118,13 @@ export async function synthesizeCallbackEdges(
     }
   }
 
+  // markPass reports each pass but does not move the step clock, so without a
+  // restart here 'dedupe-merge' absorbed the whole pass phase (184s on vscode,
+  // which pointed profiling at a sub-second merge). Restart it without counting
+  // a progress step — SYNTH_PROGRESS_STEPS stays the same.
+  if (process.env.CODEGRAPH_SYNTH_TIMINGS) console.error(`[synth-timing] passes-wall: ${Date.now() - markT.t}ms`);
+  markT.t = Date.now();
+
   const merged: Edge[] = [];
   const seen = new Set<string>();
   for (const e of passEdges.flat()) {
