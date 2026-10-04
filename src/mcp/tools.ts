@@ -4,7 +4,7 @@
  * Defines the tools exposed by the CodeGraph MCP server.
  */
 
-import { applyExploreBudgetPolicy, compactRelationships, compactRelationshipsEnabled, explorePeripheralSkeletonEnabled } from './explore-budget-policy';
+import { adaptBudgetToFlow, applyExploreBudgetPolicy, compactRelationships, compactRelationshipsEnabled, explorePeripheralSkeletonEnabled } from './explore-budget-policy';
 import type CodeGraph from '../index';
 import type { QueryPool } from './query-pool';
 import { findNearestCodeGraphRoot, isSameIndexRoot } from '../directory';
@@ -5133,6 +5133,7 @@ export class ToolHandler {
     // is synchronous, so the grammars it needs are loaded here, once.
     await warmBranchGuardGrammars();
     const flow = this.buildFlowFromNamedSymbols(cg, matchQuery);
+    budget = adaptBudgetToFlow(budget, flow.pathNodeIds.size);
 
     // The symbols the question is about: exact targets, the named ones, the spine.
     const questionIds = new Set([...exactNodeIds, ...flow.pathNodeIds, ...flow.namedNodeIds]);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  adaptBudgetToFlow,
   applyExploreBudgetPolicy,
   compactRelationships,
   compactRelationshipsEnabled,
@@ -52,5 +53,15 @@ describe('explore budget policy (HP fork, F4)', () => {
     expect(compactRelationshipsEnabled({ CODEGRAPH_EXPLORE_COMPACT_META: '0' })).toBe(false);
     expect(explorePeripheralSkeletonEnabled({})).toBe(false);
     expect(explorePeripheralSkeletonEnabled({ CODEGRAPH_EXPLORE_PERIPHERAL_SKELETON: '1' })).toBe(true);
+  });
+
+  it('adaptive flow ceiling: shrinks only with a real spine and an explicit factor', () => {
+    const tier = getExploreOutputBudget(10_000);
+    expect(adaptBudgetToFlow(tier, 5, {})).toEqual(tier);
+    expect(adaptBudgetToFlow(tier, 1, { CODEGRAPH_EXPLORE_ADAPTIVE_FLOW: '0.6' })).toEqual(tier);
+    const shrunk = adaptBudgetToFlow(tier, 3, { CODEGRAPH_EXPLORE_ADAPTIVE_FLOW: '0.6' });
+    expect(shrunk.maxOutputChars).toBe(Math.round(tier.maxOutputChars * 0.6));
+    expect(shrunk.maxCharsPerFile).toBe(tier.maxCharsPerFile);
+    expect(adaptBudgetToFlow(tier, 3, { CODEGRAPH_EXPLORE_ADAPTIVE_FLOW: '1' })).toEqual(tier);
   });
 });

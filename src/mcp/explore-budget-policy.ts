@@ -87,3 +87,23 @@ export function compactRelationships(
     return { kind, edges: unique.slice(0, cap), total: unique.length };
   }).filter((g) => g.total > 0);
 }
+
+/**
+ * Quality-adaptive ceiling (HP fork, F4). Once explore has found a real call
+ * path among the symbols the query named (>= 2 spine nodes), that path IS the
+ * answer and the rest of the envelope is supporting context, so the ceiling
+ * can shrink. `CODEGRAPH_EXPLORE_ADAPTIVE_FLOW` = the factor applied (0.2–1;
+ * unset/1 = off). Applied after the flow is computed, before allocation.
+ */
+export function adaptBudgetToFlow(
+  budget: ExploreOutputBudget,
+  spineSize: number,
+  env: NodeJS.ProcessEnv = process.env,
+): ExploreOutputBudget {
+  const raw = env.CODEGRAPH_EXPLORE_ADAPTIVE_FLOW;
+  if (raw === undefined || raw.trim() === '' || spineSize < 2) return budget;
+  const v = Number(raw);
+  if (!Number.isFinite(v) || v >= 1) return budget;
+  const f = Math.max(MIN_SCALE, v);
+  return { ...budget, maxOutputChars: Math.round(budget.maxOutputChars * f) };
+}
