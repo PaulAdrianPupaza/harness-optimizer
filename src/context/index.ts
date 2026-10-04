@@ -92,6 +92,20 @@ function extractSymbolsFromQuery(query: string): string[] {
     }
   }
 
+  // HP fork (F3): mixed-case identifiers every pattern above misses —
+  // acronym-led names (`RPCProtocol`, `HTTPServer`, `IOException`: camelCase
+  // wants a lowercase second char, the acronym pattern wants the token to end
+  // after the capitals) and `_`/`$`-prefixed members (`_receiveOneMessage`,
+  // `$executeCommand`: `\b` never fires before `_`/`$`). On vscode the named
+  // `RPCProtocol` was never looked up at all, so prose words filled the result.
+  const mixedCasePattern = /(?<![\w$])([_$]*[A-Za-z][A-Za-z0-9_$]*)/g;
+  while ((match = mixedCasePattern.exec(query)) !== null) {
+    const token = match[1];
+    if (token && token.length >= 3 && /[A-Z]/.test(token) && /[a-z]/.test(token)) {
+      symbols.add(token);
+    }
+  }
+
   // Extract plain lowercase identifiers (3+ chars, not already matched)
   // Catches symbol names like "undo", "redo", "history", "render", "parse"
   const lowercasePattern = /\b([a-z][a-z0-9]{2,})\b/g;
@@ -164,6 +178,12 @@ const HIGH_VALUE_NODE_KINDS: NodeKind[] = [
 /**
  * Default options for finding relevant context
  */
+/** Kinds a user-named identifier must have to claim a reserved root (HP fork, F3). */
+const NAMED_ROOT_KINDS: ReadonlySet<NodeKind> = new Set<NodeKind>([
+  'class', 'interface', 'struct', 'union', 'trait', 'protocol', 'enum', 'type_alias',
+  'function', 'method', 'component', 'route',
+]);
+
 const DEFAULT_FIND_OPTIONS: Required<FindRelevantContextOptions> = {
   searchLimit: 3,        // Reduced from 5
   traversalDepth: 1,     // Reduced from 2
@@ -587,7 +607,18 @@ export class ContextBuilder {
         }
       }
       exactMatches.sort((a, b) => b.score - a.score);
-      exactMatches = exactMatches.slice(0, Math.ceil(opts.searchLimit * 3));
+      // HP fork (F3): the trim must never evict a distinctive identifier the
+      // user typed. Exact matches score 1.0 while prefix matches score
+      // FTS + 15 + brevity, so on a large repo hundreds of `Extension*` /
+      // `Host*` classes pushed the exact `RPCProtocol` (query "extension host
+      // RPCProtocol", vscode) out of this cut and it never reached the
+      // subgraph. Small repos have too few prefix matches for this to show.
+      const cap = Math.ceil(opts.searchLimit * 3);
+      const namedTokens = new Set(symbolsFromQuery.filter(isDistinctiveIdentifier).map(s => s.toLowerCase()));
+      const named = exactMatches.filter(r => namedTokens.has(r.node.name.toLowerCase())).slice(0, cap);
+      const namedIds = new Set(named.map(r => r.node.id));
+      const rest = exactMatches.filter(r => !namedIds.has(r.node.id)).slice(0, Math.max(0, cap - named.length));
+      exactMatches = [...named, ...rest].sort((a, b) => b.score - a.score);
     }
 
     // Step 2c: Match an exact Han filename (with or without its extension).
@@ -809,8 +840,14 @@ export class ContextBuilder {
           // Multiplicative boost — 2 terms → 2x, 3 terms → 2.5x
           result.score *= 1 + matchCount * 0.5;
         } else if (distinctiveExactMatchIds.has(result.node.id)) {
-          // Exact match on a distinctive identifier the user explicitly named —
-          // keep full score (e.g. "LiveEditMode DevServerPreview").
+          // Exact match on a distinctive identifier the user explicitly named
+          // (e.g. "LiveEditMode DevServerPreview"). HP fork (F3): give it the
+          // boost a FULL multi-term match would get. Keeping it at 1x let two
+          // prose words outrank it on large repos — "extension host RPCProtocol"
+          // on vscode filled every slot with *ExtensionHost* classes (2x) and
+          // dropped rpcProtocol.ts entirely. A name the user typed is stronger
+          // evidence than two dictionary words co-occurring in a symbol name.
+          result.score *= 1 + termGroups.length * 0.5;
         } else if (exactMatchIds.has(result.node.id)) {
           // Exact match on a COMMON word (e.g. "flat" → FLAT): high-scoring noise
           // inflated by the +exact-name bonus, corroborated by no other query
@@ -1024,6 +1061,27 @@ export class ContextBuilder {
         ...exactFileMatches,
         ...filteredResults.filter((result) => !exactFileIds.has(result.node.id)),
       ];
+    }
+
+    // HP fork (F3): reserve entry points for the identifiers the user named.
+    // On a large repo prose words in the same query ("extension host") match
+    // hundreds of multi-term symbols that outscore a single named definition,
+    // so `RPCProtocol` (vscode-01) ranked below the 8-root cut and never
+    // entered the subgraph. A definition the user spelled out is the strongest
+    // evidence in the query: it always gets a root (up to half the slots).
+    const namedRootTokens = new Set(symbolsFromQuery.filter(isDistinctiveIdentifier).map(s => s.toLowerCase()));
+    if (namedRootTokens.size > 0) {
+      // Move them to the FRONT whether or not they already ranked: ranked at
+      // #9 is as lost as not ranked at all once the cap below cuts at 8.
+      const reserved = exactMatches
+        .filter(r => namedRootTokens.has(r.node.name.toLowerCase())
+          && NAMED_ROOT_KINDS.has(r.node.kind)
+          && (isTestQuery || !isTestFile(r.node.filePath)))
+        .slice(0, Math.ceil(opts.searchLimit / 2));
+      if (reserved.length > 0) {
+        const reservedIds = new Set(reserved.map(r => r.node.id));
+        filteredResults = [...reserved, ...filteredResults.filter(r => !reservedIds.has(r.node.id))];
+      }
     }
 
     // Cap entry points so traversal budget isn't spread too thin.
