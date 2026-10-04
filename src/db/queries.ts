@@ -1414,9 +1414,12 @@ export class QueryBuilder {
    * is capped by AMBIGUOUS_NAME_CEILING (#999).
    */
   /**
-   * Failed call references whose name tail starts with `prefix`, for the
-   * given languages (HP fork, F3: RPC-proxy synthesis). Failed rows are the
-   * ones a completed resolution pass could not bind.
+   * Unresolved call references whose LAST name segment starts with `prefix`,
+   * from source nodes in the given languages (HP fork, F3: RPC-proxy synthesis).
+   * Deliberately independent of `status`, `name_tail` and the row's `language`:
+   * on the bulk-index path synthesis can run before those columns are final,
+   * so the tail is derived from `reference_name` and the language from the
+   * source node.
    */
   getFailedCallRefsWithTailPrefix(
     prefix: string,
@@ -1424,12 +1427,20 @@ export class QueryBuilder {
   ): Array<{ fromNodeId: string; nameTail: string; line: number; filePath: string }> {
     if (languages.length === 0) return [];
     const rows = this.db.prepare(
-      `SELECT from_node_id, name_tail, line, file_path FROM unresolved_refs
-        WHERE status = 'failed' AND reference_kind = 'calls'
-          AND substr(name_tail, 1, ?) = ?
-          AND language IN (${languages.map(() => '?').join(',')})`
-    ).all(prefix.length, prefix, ...languages) as Array<{ from_node_id: string; name_tail: string; line: number; file_path: string }>;
-    return rows.map((r) => ({ fromNodeId: r.from_node_id, nameTail: r.name_tail, line: r.line, filePath: r.file_path }));
+      `SELECT r.from_node_id, r.reference_name, r.line, r.file_path FROM unresolved_refs r
+         JOIN nodes n ON n.id = r.from_node_id
+        WHERE r.reference_kind = 'calls'
+          AND instr(r.reference_name, ?) > 0
+          AND n.language IN (${languages.map(() => '?').join(',')})`
+    ).all(prefix, ...languages) as Array<{ from_node_id: string; reference_name: string; line: number; file_path: string }>;
+    const out: Array<{ fromNodeId: string; nameTail: string; line: number; filePath: string }> = [];
+    for (const r of rows) {
+      const tail = r.reference_name.slice(r.reference_name.lastIndexOf('.') + 1);
+      if (tail.startsWith(prefix) && tail.length > prefix.length) {
+        out.push({ fromNodeId: r.from_node_id, nameTail: tail, line: r.line, filePath: r.file_path });
+      }
+    }
+    return out;
   }
 
   getNodesByName(name: string): Node[] {
