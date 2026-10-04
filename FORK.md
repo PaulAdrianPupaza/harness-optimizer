@@ -16,6 +16,26 @@ parent `harness-optimizer/` workspace (`knowledge-base/`, `bench/`, `results/`).
 | `CODEGRAPH_SYNTH_TIMINGS` charges synthesis pass time to a new `passes-wall` line instead of `dedupe-merge` | `dedupe-merge` showed 184 s on vscode (and 119 s in a 10-file sync) for a sub-second merge: the step clock never moved while passes ran | `src/resolution/callback-synthesizer.ts` | `__tests__/synth-timing-attribution.test.ts` |
 | Telemetry **off by default** (`DEFAULT_TELEMETRY_ENABLED = false`; installer toggle defaults to off) | Indexing proprietary HP code must never phone home without an explicit opt-in | `src/telemetry/index.ts`, `src/installer/index.ts`, `TELEMETRY.md` | `__tests__/telemetry.test.ts` (*HP fork default*) |
 
+### F3 — retrieval at scale
+
+| Change | Why | Files | Tests |
+|---|---|---|---|
+| Query tokenizer recognizes acronym-led (`RPCProtocol`) and `_`/`$`-prefixed (`_receiveOne`, `$executeCommand`) identifiers; the prefix trim and an entry-point reservation keep named identifiers in the result | On vscode the named `RPCProtocol` was never looked up and prose words filled every slot; level-1 vscode recall 0.55/0.32 → 0.58/0.47 (symbols/files) | `src/context/index.ts` | `__tests__/named-identifier-seeding.test.ts` |
+| `rpcProxyEdges` synthesis pass: unresolved `proxy.$method(…)` calls → the 1–4 class methods named `$method` | VS Code's extension-host ↔ main-thread RPC dead-ended the flow; +1,600 edges on vscode | `src/resolution/rpc-proxy-synthesizer.ts`, `src/resolution/callback-synthesizer.ts`, `src/db/queries.ts` | `__tests__/rpc-proxy-synthesizer.test.ts` |
+
+### F4 — token budget (`src/mcp/explore-budget-policy.ts`)
+
+| Change | Default | Evidence |
+|---|---|---|
+| Output ceiling × `CODEGRAPH_EXPLORE_BUDGET_SCALE` | **0.6** (`1` = upstream); calls with exact targets keep the upstream ceiling | Level-2 A/B (Sonnet, 20 paired sessions): −13% fresh input (p=0.005), −8% cost vs full ceiling, recall unchanged |
+| Compact Relationships map (dedup name pairs, drop self pairs, cap `references` at 5) | on (`CODEGRAPH_EXPLORE_COMPACT_META=0` = upstream) | Same ceiling, more source |
+| Quality-adaptive ceiling once a flow spine is found (`CODEGRAPH_EXPLORE_ADAPTIVE_FLOW`) | off | Level-1: 0.6 → −14% tokens on gin, no recall loss |
+| Peripheral-file skeleton (`CODEGRAPH_EXPLORE_PERIPHERAL_SKELETON`) | off | No effect on the benchmark |
+
+Tests: `__tests__/explore-budget-policy.test.ts`. The upstream allocation suites pin
+`CODEGRAPH_EXPLORE_BUDGET_SCALE=1` in `__tests__/setup-home-sandbox.ts` (their fixtures are sized
+to the upstream ceilings).
+
 ## Building on Windows
 
 ```bash
