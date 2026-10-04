@@ -1413,6 +1413,25 @@ export class QueryBuilder {
    * run — ReferenceResolver memoizes this in its nameCache — and the population
    * is capped by AMBIGUOUS_NAME_CEILING (#999).
    */
+  /**
+   * Failed call references whose name tail starts with `prefix`, for the
+   * given languages (HP fork, F3: RPC-proxy synthesis). Failed rows are the
+   * ones a completed resolution pass could not bind.
+   */
+  getFailedCallRefsWithTailPrefix(
+    prefix: string,
+    languages: string[]
+  ): Array<{ fromNodeId: string; nameTail: string; line: number; filePath: string }> {
+    if (languages.length === 0) return [];
+    const rows = this.db.prepare(
+      `SELECT from_node_id, name_tail, line, file_path FROM unresolved_refs
+        WHERE status = 'failed' AND reference_kind = 'calls'
+          AND substr(name_tail, 1, ?) = ?
+          AND language IN (${languages.map(() => '?').join(',')})`
+    ).all(prefix.length, prefix, ...languages) as Array<{ from_node_id: string; name_tail: string; line: number; file_path: string }>;
+    return rows.map((r) => ({ fromNodeId: r.from_node_id, nameTail: r.name_tail, line: r.line, filePath: r.file_path }));
+  }
+
   getNodesByName(name: string): Node[] {
     if (!this.stmts.getNodesByName) {
       this.stmts.getNodesByName = this.db.prepare(

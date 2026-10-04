@@ -22,6 +22,7 @@
  * tagged `provenance:'heuristic'`. See docs/design/callback-edge-synthesis.md.
  */
 import type { Edge, Language, Node, NodeKind } from '../types';
+import { rpcProxyEdges } from './rpc-proxy-synthesizer';
 import type { QueryBuilder } from '../db/queries';
 import type { ResolutionContext } from './types';
 import { isGeneratedFile } from '../extraction/generated-detection';
@@ -3860,6 +3861,9 @@ export const SYNTH_PASSES: SynthPassDef[] = [
   { name: 'ginEdges', gate: (has) => has('go'), run: (q, c, y) => ginMiddlewareChainEdges(q, c, y) },
   { name: 'thunkEdges', gate: (has) => has(...JS_FAMILY), run: (q, c, y) => reduxThunkEdges(q, c, y) },
   { name: 'registryEdges', gate: ALWAYS, run: (_q, c, y) => objectRegistryEdges(c, y) },
+  // HP fork (F3): `proxy.$method(…)` RPC calls onto the `$method` implementation
+  // on the other side of an IPC boundary (VS Code extension-host protocol).
+  { name: 'rpcProxyEdges', gate: (has) => has(...JS_FAMILY), run: (q, _c, y) => rpcProxyEdges(q, y, JS_FAMILY) },
   { name: 'rtkEdges', gate: (has) => has(...JS_FAMILY), run: (q, c, y) => rtkQueryEdges(q, c, y) },
   { name: 'piniaEdges', gate: (has) => has('vue', ...JS_FAMILY), run: (_q, c, y) => piniaStoreEdges(c, y) },
   { name: 'vuexEdges', gate: (has) => has('vue', ...JS_FAMILY), run: (_q, c, y) => vuexDispatchEdges(c, y) },
