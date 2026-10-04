@@ -4,16 +4,21 @@ import {
   applyExploreBudgetPolicy,
   compactRelationships,
   compactRelationshipsEnabled,
+  DEFAULT_EXPLORE_BUDGET_SCALE,
   exploreBudgetScale,
   explorePeripheralSkeletonEnabled,
 } from '../src/mcp/explore-budget-policy';
 import { getExploreOutputBudget } from '../src/mcp/tools';
 
 describe('explore budget policy (HP fork, F4)', () => {
-  it('leaves the upstream tier budget untouched by default', () => {
+  it('defaults to the HP-fork ceiling factor and restores upstream at 1', () => {
     const tier = getExploreOutputBudget(10_000);
-    expect(applyExploreBudgetPolicy(tier, {})).toEqual(tier);
-    expect(exploreBudgetScale({})).toBe(1);
+    expect(exploreBudgetScale({})).toBe(DEFAULT_EXPLORE_BUDGET_SCALE);
+    expect(DEFAULT_EXPLORE_BUDGET_SCALE).toBe(0.6);
+    expect(applyExploreBudgetPolicy(tier, {}).maxOutputChars).toBe(Math.round(tier.maxOutputChars * 0.6));
+    expect(applyExploreBudgetPolicy(tier, { CODEGRAPH_EXPLORE_BUDGET_SCALE: '1' })).toEqual(tier);
+    expect(applyExploreBudgetPolicy(tier, {}, { exactTargets: true })).toEqual(tier);
+    expect(exploreBudgetScale({ CODEGRAPH_EXPLORE_BUDGET_SCALE: 'abc' })).toBe(DEFAULT_EXPLORE_BUDGET_SCALE);
   });
 
   it('scales the ceilings and clamps the factor to [0.2, 1]', () => {
@@ -23,7 +28,6 @@ describe('explore budget policy (HP fork, F4)', () => {
     expect(half.maxCharsPerFile).toBe(Math.round(tier.maxCharsPerFile / 2));
     expect(exploreBudgetScale({ CODEGRAPH_EXPLORE_BUDGET_SCALE: '0.01' })).toBe(0.2);
     expect(exploreBudgetScale({ CODEGRAPH_EXPLORE_BUDGET_SCALE: '3' })).toBe(1);
-    expect(exploreBudgetScale({ CODEGRAPH_EXPLORE_BUDGET_SCALE: 'abc' })).toBe(1);
     const ceilingOnly = applyExploreBudgetPolicy(tier, { CODEGRAPH_EXPLORE_BUDGET_SCALE: '0.5', CODEGRAPH_EXPLORE_BUDGET_PERFILE: '0' });
     expect(ceilingOnly.maxCharsPerFile).toBe(tier.maxCharsPerFile);
   });

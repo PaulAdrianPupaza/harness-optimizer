@@ -22,6 +22,13 @@
  * setting HOME and restoring it) keep working: they restore to this sandbox.
  */
 import { afterAll } from 'vitest';
+
+// HP fork: explore's output ceiling defaults to 0.6x upstream in the fork
+// (src/mcp/explore-budget-policy.ts). The upstream allocation suites size their
+// fixtures against the upstream ceilings, so they run with the upstream budget;
+// the fork default is covered by explore-budget-policy.test.ts, which passes
+// its environment explicitly. Inherited by spawned CLI / MCP processes.
+process.env.CODEGRAPH_EXPLORE_BUDGET_SCALE ??= '1';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';

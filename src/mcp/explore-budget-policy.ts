@@ -8,7 +8,7 @@
  * so the upstream tier table (`getExploreOutputBudget`) stays untouched and
  * mergeable.
  *
- * `CODEGRAPH_EXPLORE_BUDGET_SCALE` (0.2–1, default 1 = upstream) scales the
+ * `CODEGRAPH_EXPLORE_BUDGET_SCALE` (0.2–1; fork default 0.6, 1 = upstream) scales the
  * character ceilings uniformly, which keeps the tier invariant (a larger tier
  * never gets a smaller per-file cap than a smaller one). It exists to measure
  * the recall/token curve (bench/level1) before a default is chosen.
@@ -17,15 +17,30 @@ import type { ExploreOutputBudget } from './tools';
 
 const MIN_SCALE = 0.2;
 
+/**
+ * HP-fork default ceiling factor. Level-2 A/B (Sonnet, vscode + gin, 20 paired
+ * sessions): 0.6 cut fresh input 13% (p=0.005) and cost 8% versus the full
+ * upstream ceiling, with answer recall unchanged — the agent makes a few more
+ * calls but each carries far less new context. `=1` restores upstream.
+ */
+export const DEFAULT_EXPLORE_BUDGET_SCALE = 0.6;
+
 export function exploreBudgetScale(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env.CODEGRAPH_EXPLORE_BUDGET_SCALE;
-  if (raw === undefined || raw.trim() === '') return 1;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_EXPLORE_BUDGET_SCALE;
   const v = Number(raw);
-  if (!Number.isFinite(v)) return 1;
+  if (!Number.isFinite(v)) return DEFAULT_EXPLORE_BUDGET_SCALE;
   return Math.min(1, Math.max(MIN_SCALE, v));
 }
 
-export function applyExploreBudgetPolicy(budget: ExploreOutputBudget, env: NodeJS.ProcessEnv = process.env): ExploreOutputBudget {
+export function applyExploreBudgetPolicy(
+  budget: ExploreOutputBudget,
+  env: NodeJS.ProcessEnv = process.env,
+  opts: { exactTargets?: boolean } = {},
+): ExploreOutputBudget {
+  // A qualified name / line anchor is a request for a whole body: keep the
+  // upstream ceiling for it (upstream's explore-exact-target contract).
+  if (opts.exactTargets) return budget;
   const scale = exploreBudgetScale(env);
   if (scale === 1) return budget;
   return {

@@ -4086,7 +4086,6 @@ export class ToolHandler {
     } catch {
       budget = getExploreOutputBudget(Infinity);
     }
-    budget = applyExploreBudgetPolicy(budget);
     const maxFiles = clamp((args.maxFiles as number) || budget.defaultMaxFiles, 1, 20);
 
     // File paths named in the query become PINNED files: guaranteed admission,
@@ -5133,6 +5132,10 @@ export class ToolHandler {
     // is synchronous, so the grammars it needs are loaded here, once.
     await warmBranchGuardGrammars();
     const flow = this.buildFlowFromNamedSymbols(cg, matchQuery);
+    // HP fork (F4): the ceiling policy runs once the query's exact targets are
+    // known — a qualified name or line anchor asks for a WHOLE body, so those
+    // calls keep the upstream ceiling.
+    budget = applyExploreBudgetPolicy(budget, process.env, { exactTargets: exactNodeIds.size > 0 || lineAnchors.length > 0 });
     budget = adaptBudgetToFlow(budget, flow.pathNodeIds.size);
 
     // The symbols the question is about: exact targets, the named ones, the spine.
