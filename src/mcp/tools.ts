@@ -4,6 +4,7 @@
  * Defines the tools exposed by the CodeGraph MCP server.
  */
 
+import { applyExploreBudgetPolicy, compactRelationships, compactRelationshipsEnabled, explorePeripheralSkeletonEnabled } from './explore-budget-policy';
 import type CodeGraph from '../index';
 import type { QueryPool } from './query-pool';
 import { findNearestCodeGraphRoot, isSameIndexRoot } from '../directory';
@@ -4085,6 +4086,7 @@ export class ToolHandler {
     } catch {
       budget = getExploreOutputBudget(Infinity);
     }
+    budget = applyExploreBudgetPolicy(budget);
     const maxFiles = clamp((args.maxFiles as number) || budget.defaultMaxFiles, 1, 20);
 
     // File paths named in the query become PINNED files: guaranteed admission,
@@ -5100,6 +5102,14 @@ export class ToolHandler {
         byKind.set(edge.kind, group);
       }
 
+      if (compactRelationshipsEnabled()) {
+        for (const { kind, edges, total } of compactRelationships(byKind, budget.maxEdgesPerRelationshipKind)) {
+          lines.push(`**${kind}:**`);
+          for (const e of edges) lines.push(`- ${e.source} → ${e.target}`);
+          if (total > edges.length) lines.push(`- ... and ${total - edges.length} more`);
+          lines.push('');
+        }
+      } else {
       for (const [kind, edges] of byKind) {
         const cap = budget.maxEdgesPerRelationshipKind;
         const shown = edges.slice(0, cap);
@@ -5111,6 +5121,7 @@ export class ToolHandler {
           lines.push(`- ... and ${edges.length - cap} more`);
         }
         lines.push('');
+      }
       }
     }
 
@@ -6011,9 +6022,16 @@ export class ToolHandler {
       // A line RANGE the agent asked for (`lines 900-1003`) is not a symbol, so
       // the per-symbol view has no way to show it — such a file takes the
       // cluster path, which renders anchor spans first.
-      if (!fileStale && adaptiveExploreEnabled() && flow.pathNodeIds.size > 0
+      // HP fork (F4): a PERIPHERAL file — nothing on the flow spine, nothing the
+      // agent named, no search entry point — only earned its place by relevance,
+      // so its signature map is what the agent needs from it, not its bodies.
+      const peripheral = explorePeripheralSkeletonEnabled()
+        && !hasSpineNode && !spared
+        && !group.nodes.some(n => flow.namedNodeIds.has(n.id) || entryNodeIds.has(n.id));
+      if (!fileStale && adaptiveExploreEnabled()
           && !anchorSpans.has(filePath)
-          && (onSpineGodFile || (!hasSpineNode && isPolymorphicSibling(group.nodes) && !spared))) {
+          && (peripheral || (flow.pathNodeIds.size > 0
+            && (onSpineGodFile || (!hasSpineNode && isPolymorphicSibling(group.nodes) && !spared))))) {
         const syms = group.nodes
           .filter(n => n.kind !== 'import' && n.kind !== 'export' && n.startLine > 0)
           .sort((a, b) => a.startLine - b.startLine);
