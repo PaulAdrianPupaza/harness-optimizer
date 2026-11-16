@@ -4,7 +4,11 @@
  * Defines the tools exposed by the CodeGraph MCP server.
  */
 
-import { adaptBudgetToFlow, applyExploreBudgetPolicy, compactRelationships, compactRelationshipsEnabled, explorePeripheralSkeletonEnabled } from './explore-budget-policy';
+import {
+  adaptBudgetToFlow, applyExploreBudgetPolicy, blastRadiusFileCaps, compactRelationships, compactRelationshipsEnabled,
+  definitionHeaderSymbols, explorePeripheralSkeletonEnabled, focusMetaEnabled, focusRelationshipEdges,
+  NAMED_BODY_MAX_CHARS, namedBodiesEnabled, reserveNamedBodies, stripCarriageReturns,
+} from './explore-budget-policy';
 import type CodeGraph from '../index';
 import type { QueryPool } from './query-pool';
 import { findNearestCodeGraphRoot, isSameIndexRoot } from '../directory';
@@ -965,6 +969,8 @@ const ELIDED_SYMBOL_CAP = 6;
  * enclosing the line is deliberately NOT a target — it spans most of its file,
  * and "the whole class" is not what a line number asks for.
  */
+/** Kinds whose BODY is what a query naming them asks for (HP fork, F6). */
+const NAMED_CALLABLE_KINDS = new Set<string>(['function', 'method', 'constructor', 'component']);
 const ANCHOR_CALLABLE_KINDS = new Set(['method', 'function', 'constructor', 'component']);
 /** Lines either side of a single-line anchor that no callable encloses. */
 const ANCHOR_LINE_CONTEXT = 15;
@@ -3885,7 +3891,9 @@ export class ToolHandler {
     leadingIds: Iterable<string> = [],
   ): string {
     const ROOT_CAP = 5; // only the symbols the query actually targeted
-    const FILE_CAP = 4; // caller files listed per symbol before "+N more"
+    // HP fork (F6): 2 caller files + 1 test file per entry by default (upstream: 4 + 4).
+    const fileCaps = blastRadiusFileCaps();
+    const FILE_CAP = fileCaps.callers; // caller files listed per symbol before "+N more"
     const MEANINGFUL = new Set<string>([
       'function', 'method', 'class', 'interface', 'struct', 'union', 'trait', 'protocol',
       'enum', 'type_alias', 'component', 'constant', 'variable', 'property', 'field',
@@ -3918,7 +3926,7 @@ export class ToolHandler {
       const more = nonTest.length > FILE_CAP ? ` +${nonTest.length - FILE_CAP} more` : '';
       const where = nonTest.length > 0 ? ` in ${shown}${more}` : '';
       const tests = testFiles.length > 0
-        ? `; tests: ${testFiles.slice(0, FILE_CAP).map((f) => `\`${f}\``).join(', ')}${testFiles.length > FILE_CAP ? ` +${testFiles.length - FILE_CAP}` : ''}`
+        ? `; tests: ${testFiles.slice(0, fileCaps.tests).map((f) => `\`${f}\``).join(', ')}${testFiles.length > fileCaps.tests ? ` +${testFiles.length - fileCaps.tests}` : ''}`
         : this.indirectTestNote(cg, uniq, rel);
 
       entries.push(
@@ -5080,10 +5088,22 @@ export class ToolHandler {
     const blastRadius = this.buildBlastRadiusSection(cg, subgraph, exactNodeIds);
     if (blastRadius) lines.push(blastRadius);
 
+    // Compute the flow spine once — used to prepend the Flow section (below), to
+    // gate adaptive source sizing (files on the spine get full source, off-spine
+    // peers skeletonize) and, in the HP fork (F6), to keep the Relationships map
+    // about the question — which is why it now runs BEFORE that map is built.
+    // The Flow section labels each hop with its branch conditions; that read
+    // is synchronous, so the grammars it needs are loaded here, once.
+    await warmBranchGuardGrammars();
+    const flow = this.buildFlowFromNamedSymbols(cg, matchQuery);
+
     // Relationship map — show how symbols connect
-    const significantEdges = subgraph.edges.filter(e =>
+    const allSignificantEdges = subgraph.edges.filter(e =>
       e.kind !== 'contains' // skip contains — it's implied by file grouping
     );
+    const significantEdges = focusMetaEnabled()
+      ? focusRelationshipEdges(allSignificantEdges, new Set([...exactNodeIds, ...flow.pathNodeIds, ...flow.namedNodeIds]))
+      : allSignificantEdges;
 
     if (budget.includeRelationships && significantEdges.length > 0) {
       lines.push('**Relationships**');
@@ -5125,13 +5145,7 @@ export class ToolHandler {
     }
 
     // Step 4: Read contiguous file sections
-    // Compute the flow spine once — used both to prepend the Flow section (below)
-    // and to gate adaptive source sizing: files on the spine get full source,
-    // off-spine peers skeletonize.
-    // The Flow section labels each hop with its branch conditions; that read
-    // is synchronous, so the grammars it needs are loaded here, once.
-    await warmBranchGuardGrammars();
-    const flow = this.buildFlowFromNamedSymbols(cg, matchQuery);
+    // (the flow spine was computed above, before the Relationships map)
     // HP fork (F4): the ceiling policy runs once the query's exact targets are
     // known — a qualified name or line anchor asks for a WHOLE body, so those
     // calls keep the upstream ceiling.
@@ -5219,6 +5233,48 @@ export class ToolHandler {
       budget,
       maxFiles,
     );
+    // HP fork (F6): a file must be able to hold the bodies of the callables the
+    // query NAMED in it. The proportional split funds a file by how well it
+    // ranked, so a named file that shares the envelope with two well-connected
+    // peers gets a third of it and its named 70-line method renders as a gap —
+    // which is where the agent's follow-up Read lands. Same total, re-split.
+    if (namedBodiesEnabled() && allocation.allowances.size > 1) {
+      const spans = new Map<string, Array<{ start: number; end: number }>>();
+      for (const id of new Set([...exactNodeIds, ...flow.namedNodeIds, ...flow.pathNodeIds])) {
+        const n = subgraph.nodes.get(id) ?? cg.getNode(id);
+        if (!n || !NAMED_CALLABLE_KINDS.has(n.kind) || !allocation.allowances.has(n.filePath)) continue;
+        if (!(n.startLine > 0 && n.endLine >= n.startLine)) continue;
+        const list = spans.get(n.filePath) ?? [];
+        list.push({ start: n.startLine, end: n.endLine });
+        spans.set(n.filePath, list);
+      }
+      const needs = new Map<string, number>();
+      for (const [fp, list] of spans) {
+        const abs = validatePathWithinRoot(projectRoot, fp);
+        if (!abs || !existsSync(abs)) continue;
+        let srcLines: string[];
+        try { srcLines = stripCarriageReturns(readFileSync(abs, 'utf-8')).split('\n'); } catch { continue; }
+        // Rendered cost of each body (line numbers + 3 lines of padding each side,
+        // as the cluster path renders it), capped per body; overlapping bodies
+        // (a method inside a named function) are counted once.
+        const seen = new Set<number>();
+        let need = 0;
+        for (const { start, end } of list.sort((a, b) => a.start - b.start)) {
+          let body = 0;
+          for (let ln = Math.max(1, start - 3); ln <= Math.min(srcLines.length, end + 3); ln++) {
+            if (seen.has(ln)) continue;
+            seen.add(ln);
+            body += (srcLines[ln - 1] ?? '').length + String(ln).length + 2;
+          }
+          need += Math.min(body, NAMED_BODY_MAX_CHARS);
+        }
+        needs.set(fp, need);
+      }
+      if (needs.size > 0) {
+        const resplit = reserveNamedBodies(allocation.allowances, needs, EXPLORE_ALLOCATION.MIN_CHARS);
+        for (const [fp, n] of resplit) allocation.allowances.set(fp, n);
+      }
+    }
     diag?.setAllocation(allocation.allowances, allocation.cliffed, allocation.cliffAt, allocation.pool);
     // Cliffed files ship as pointers — path, symbols, line numbers — so the agent
     // can name one in a follow-up explore. Rendered below with the other
@@ -5637,7 +5693,9 @@ export class ToolHandler {
         continue;
       }
 
-      const fileLines = fileContent.split('\n');
+      // HP fork (F6): rendered lines drop a CRLF checkout's `\r`; `fileContent`
+      // stays raw for the fingerprint and drift checks.
+      const fileLines = stripCarriageReturns(fileContent).split('\n');
       const lang = group.nodes[0]?.language || '';
       const withLineNumbers = exploreLineNumbersEnabled();
       // Language-neutral separator between two non-contiguous slices of one file
@@ -6328,7 +6386,7 @@ export class ToolHandler {
       // exists to refuse: a clustered section traded for no section at all.
       let renderedWhole = false;
       if (fileLines.length <= WHOLE_FILE_MAX_LINES && buysWhole) {
-        const body = fileContent.replace(/\n+$/, '');
+        const body = stripCarriageReturns(fileContent).replace(/\n+$/, '');
         const wholeRange: ExploreLineRange = { start: 1, end: body.split('\n').length };
         const fullSection = withLineNumbers ? numberSourceLines(body, 1) : body;
         // The buy decision above was made on the file's FULL size on purpose: it
@@ -6445,12 +6503,18 @@ export class ToolHandler {
       // qualified `SQLCompiler.as_sql` is no longer outranked by a denser cluster
       // around `SQLInsertCompiler.as_sql` that merely matched the bare name.
       const EXACT_IMPORTANCE = 11;
+      const NAMED_CALLABLE_IMPORTANCE = 10.5;
+      const namedCallableFirst = namedBodiesEnabled();
       const ranges: Array<{ start: number; end: number; name: string; kind: string; importance: number; spine: boolean; spineCallLine?: number; qualifiedName?: string }> = [...rangeNodes.values()]
         // Drop whole-file envelope nodes (containers covering >50% of the file).
         .filter(n => !(ENVELOPE_KINDS.has(n.kind) && (n.endLine - n.startLine + 1) > fileLines.length * 0.5))
         .map(n => {
           let importance = 1;
           if (exactNodeIds.has(n.id)) importance = EXACT_IMPORTANCE;
+          // HP fork (F6): a callable the query NAMED outranks a search root that
+          // merely matched (every method of a named class is an entry point), so
+          // its body wins the file's reservation — see `reserveNamedBodies`.
+          else if (namedCallableFirst && NAMED_CALLABLE_KINDS.has(n.kind) && flow.namedNodeIds.has(n.id)) importance = NAMED_CALLABLE_IMPORTANCE;
           else if (entryNodeIds.has(n.id)) importance = 10;
           else if (flow.namedNodeIds.has(n.id)) importance = 9; // agent named it → keep its cluster
           else if (glueNodeIds.has(n.id)) importance = 6; // bridging caller/callee of an entry
@@ -7128,8 +7192,10 @@ export class ToolHandler {
         /** Longest the header may run; fewer names are listed to meet it (never under one). */
         maxLength = Infinity,
       ): string => {
+        // HP fork (F6): definitions only — edge lines are not symbols of the file.
+        const headerSymbols = focusMetaEnabled() ? definitionHeaderSymbols(symbols) : symbols;
         for (let cap = budget.maxSymbolsInFileHeader; ; cap--) {
-          const { shown, omitted } = biasHeaderSymbols(symbols, elided, cap);
+          const { shown, omitted } = biasHeaderSymbols(headerSymbols, elided, cap);
           const header = fileSectionHeader(filePath, omitted > 0
             ? `${shown.join(', ')}, +${omitted} more`
             : shown.join(', '));
