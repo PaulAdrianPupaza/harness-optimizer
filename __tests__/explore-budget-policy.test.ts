@@ -14,7 +14,11 @@ import {
   focusRelationshipEdges,
   LARGE_REPO_EXPLORE_BUDGET_SCALE,
   LARGE_REPO_FILE_COUNT,
+  lowerTypesEnabled,
   namedBodiesEnabled,
+  namedCtorsEnabled,
+  namedTypesTierEnabled,
+  namedWholeEnabled,
   reserveNamedBodies,
   stripCarriageReturnEnabled,
   stripCarriageReturns,
@@ -338,11 +342,16 @@ describe('stripCarriageReturns (HP fork, F6)', () => {
   });
 });
 
-describe('F6 switches', () => {
+describe('F6/F7 switches', () => {
   const switches: Array<[string, (env: NodeJS.ProcessEnv) => boolean]> = [
     ['CODEGRAPH_EXPLORE_NAMED_BODIES', namedBodiesEnabled],
     ['CODEGRAPH_EXPLORE_FOCUS_META', focusMetaEnabled],
     ['CODEGRAPH_EXPLORE_STRIP_CR', stripCarriageReturnEnabled],
+    ['CODEGRAPH_EXPLORE_NAMED_TYPES', namedTypesTierEnabled],
+    // F7
+    ['CODEGRAPH_EXPLORE_LOWER_TYPES', lowerTypesEnabled],
+    ['CODEGRAPH_EXPLORE_NAMED_CTORS', namedCtorsEnabled],
+    ['CODEGRAPH_EXPLORE_NAMED_WHOLE', namedWholeEnabled],
   ];
 
   it.each(switches)('%s: on when unset, off at 0/false, on at 1', (name, enabled) => {

@@ -6,7 +6,8 @@
 
 import {
   adaptBudgetToFlow, applyExploreBudgetPolicy, blastRadiusFileCaps, compactRelationships, compactRelationshipsEnabled,
-  definitionHeaderSymbols, definitionRefs, explorePeripheralSkeletonEnabled, namedTypesTierEnabled, focusMetaEnabled, focusRelationshipEdges,
+  definitionHeaderSymbols, definitionRefs, explorePeripheralSkeletonEnabled, namedTypesTierEnabled,
+  lowerTypesEnabled, namedCtorsEnabled, namedWholeEnabled, focusMetaEnabled, focusRelationshipEdges,
   NAMED_BODY_MAX_CHARS, namedBodiesEnabled, reserveNamedBodies, stripCarriageReturns,
 } from './explore-budget-policy';
 import type CodeGraph from '../index';
@@ -4382,6 +4383,9 @@ export class ToolHandler {
     // uncorroborated guess at an overloaded member name.
     const namedTypesOn = namedTypesTierEnabled();
     const namedClassFiles = new Set<string>();
+    // HP fork (F7): the class/struct nodes behind `namedClassFiles` — their
+    // constructors join the named-body reservation (`CODEGRAPH_EXPLORE_NAMED_CTORS`).
+    const namedClassNodes: Node[] = [];
     {
       const FILE_EXT = /\.(?:java|kt|kts|ts|tsx|js|jsx|mjs|cjs|cs|py|go|rb|php|swift|rs|cpp|cc|cxx|c|h|hpp|scala|lua|dart|vue|svelte|astro|erl|hrl)$/i;
       const CALLABLE = new Set(['method', 'function', 'component', 'constructor']);
@@ -4409,11 +4413,26 @@ export class ToolHandler {
       // repo, so biasing toward it just pulls overloads to whichever stack
       // embeds it, re-burying the rest (#720).
       const projectNameTokens = cg.getProjectNameTokens();
+      // HP fork (F7, `CODEGRAPH_EXPLORE_LOWER_TYPES`): a camelCase token that names
+      // a TYPE exactly is a type token too. Go's unexported types are lower-case
+      // (`jsonBinding`): without this, "jsonBinding Bind" could not pick
+      // `jsonBinding.Bind` out of gin's 12 `Bind`s, and binding/json.go never
+      // reached the candidates (F7 diagnosis, gin-04).
+      const TYPE_DEF_KINDS = new Set(['class', 'struct', 'interface', 'trait', 'protocol', 'type_alias']);
+      const lowerTypeTokens = new Set(lowerTypesEnabled()
+        ? tokens.filter((o) => /^[a-z][a-z0-9]*[A-Z][A-Za-z0-9]*$/.test(o)
+          && cg.getNodesByName(o).some((n) => TYPE_DEF_KINDS.has(n.kind) && n.name === o && !isTestPath(n.filePath)))
+        : []);
       const typeTokens = tokens.filter(
-        (o) => /^[A-Z][A-Za-z0-9]{3,}/.test(o) && !projectNameTokens.has(normalizeNameToken(o)),
+        (o) => (/^[A-Z][A-Za-z0-9]{3,}/.test(o) || lowerTypeTokens.has(o)) && !projectNameTokens.has(normalizeNameToken(o)),
       );
-      const inNamedContext = (n: Node) =>
+      // `self` is the token being resolved. HP fork (F7, with LOWER_TYPES): it is
+      // not context for itself — a PascalCase method name (`Bind`) is also a type
+      // token, so every `X::Bind` "matched its own context" and the overload pick
+      // fell back to body size instead of the `jsonBinding` the query named.
+      const inNamedContext = (n: Node, self?: string) =>
         typeTokens.some((ct) => {
+          if (self !== undefined && lowerTypesEnabled() && ct === self) return false;
           const lc = ct.toLowerCase();
           return n.filePath.toLowerCase().includes(lc) || n.qualifiedName.toLowerCase().includes(lc);
         });
@@ -4480,9 +4499,11 @@ export class ToolHandler {
             }
           }
         }
-        if (namedTypesOn && !isQual && /^[A-Z]/.test(t)) {
+        if (namedTypesOn && !isQual && (/^[A-Z]/.test(t) || lowerTypeTokens.has(t))) {
           const classes = raw.filter((n) => (n.kind === 'class' || n.kind === 'struct') && n.name === t && !isTestPath(n.filePath));
-          if (classes.length >= 1 && classes.length <= 3) for (const c of classes) namedClassFiles.add(c.filePath);
+          if (classes.length >= 1 && classes.length <= 3) {
+            for (const c of classes) { namedClassFiles.add(c.filePath); namedClassNodes.push(c); }
+          }
         }
         let cands = raw
           .filter((n) => SEEDABLE.has(n.kind) && !isTestPath(n.filePath))
@@ -4542,7 +4563,7 @@ export class ToolHandler {
           const maxCallers = Math.max(1, ...counts.values());
           tierPicks = cands.filter((c, i) => i === 0 || (counts.get(c.id) ?? 0) >= maxCallers * 0.25);
         } else {
-          const ctx = cands.filter(inNamedContext);
+          const ctx = cands.filter((n) => inNamedContext(n, t));
           picks = ctx.length > 0 ? ctx.slice(0, 4) : cands.slice(0, 1);
           // Corroborated overloads all earn the tier. The single fallback is a
           // GUESS among > 3 namesakes (vscode's `onDidChangeContent` picked
@@ -4578,6 +4599,22 @@ export class ToolHandler {
         // that sorts above the CG-28 penalty.
         for (const n of tierPicks) {
           if (!isInterfaceOwnedMethod(n)) tierSeedIds.add(n.id);
+        }
+      }
+    }
+
+    // HP fork (F7): the constructor of a class the query named is where the class
+    // wires itself into the flow (vscode's `ModelTracker` registers the
+    // `onDidChangeContent` → `$acceptModelChanged` listener there), so it is
+    // reserved and ranked like a named callable.
+    const namedCtorIds = new Set<string>();
+    if (namedCtorsEnabled()) {
+      for (const cls of namedClassNodes) {
+        let inFile: Node[] = [];
+        try { inFile = cg.getNodesInFile(cls.filePath); } catch { /* no ctor then */ }
+        for (const n of inFile) {
+          const isCtor = n.kind === 'method' && (n.name === 'constructor' || n.name === '__init__' || n.name === cls.name);
+          if (isCtor && n.startLine >= cls.startLine && n.endLine <= cls.endLine) namedCtorIds.add(n.id);
         }
       }
     }
@@ -5269,8 +5306,8 @@ export class ToolHandler {
       // the body the agent qualified — `FileService.writeFile` — stays windowed.
       const tiers: Array<Set<string>> = [
         new Set([...exactNodeIds, ...flow.pathNodeIds]),
-        new Set([...exactNodeIds, ...flow.pathNodeIds, ...flow.uniqueNamedNodeIds]),
-        new Set([...exactNodeIds, ...flow.pathNodeIds, ...flow.uniqueNamedNodeIds, ...flow.namedNodeIds]),
+        new Set([...exactNodeIds, ...flow.pathNodeIds, ...flow.uniqueNamedNodeIds, ...namedCtorIds]),
+        new Set([...exactNodeIds, ...flow.pathNodeIds, ...flow.uniqueNamedNodeIds, ...namedCtorIds, ...flow.namedNodeIds]),
       ];
       const srcCache = new Map<string, string[] | null>();
       const sourceLinesOf = (fp: string): string[] | null => {
@@ -6108,7 +6145,11 @@ export class ToolHandler {
           spine: flow.pathNodeIds.has(n.id),
           qualifiedName: n.qualifiedName,
         }));
-      const spareNamed = group.nodes.some(n => flow.uniqueNamedNodeIds.has(n.id));
+      // HP fork (F7, LOWER_TYPES): a file defining a type the query NAMED is spared
+      // too — the polymorphic-sibling skeleton reduced gin's `binding/json.go` to
+      // signatures right after the query singled out `jsonBinding` among 13 bindings.
+      const spareNamed = group.nodes.some(n => flow.uniqueNamedNodeIds.has(n.id))
+        || (lowerTypesEnabled() && namedClassFiles.has(filePath));
       const fileDefinesSuper = definesPolymorphicSupertype(group.nodes);
       const spared = spareNamed && !fileDefinesSuper;
       const CALLABLE_BODY = new Set(['method', 'function', 'constructor', 'component']);
@@ -6539,7 +6580,7 @@ export class ToolHandler {
       // budget — the agent explicitly asked for these symbols.
       const rangeNodes = new Map<string, Node>();
       for (const n of group.nodes) if (n.startLine > 0 && n.endLine > 0) rangeNodes.set(n.id, n);
-      for (const id of [...flow.namedNodeIds, ...exactNodeIds]) {
+      for (const id of [...flow.namedNodeIds, ...exactNodeIds, ...namedCtorIds]) {
         if (rangeNodes.has(id)) continue;
         const n = cg.getNode(id);
         if (n && n.filePath === filePath && n.startLine > 0 && n.endLine > 0) rangeNodes.set(id, n);
@@ -6552,6 +6593,7 @@ export class ToolHandler {
       const EXACT_IMPORTANCE = 11;
       const NAMED_CALLABLE_IMPORTANCE = 10.5;
       const namedCallableFirst = namedBodiesEnabled();
+      const namedWholeOn = namedCallableFirst && namedWholeEnabled();
       const ranges: Array<{ start: number; end: number; name: string; kind: string; importance: number; spine: boolean; spineCallLine?: number; qualifiedName?: string }> = [...rangeNodes.values()]
         // Drop whole-file envelope nodes (containers covering >50% of the file).
         .filter(n => !(ENVELOPE_KINDS.has(n.kind) && (n.endLine - n.startLine + 1) > fileLines.length * 0.5))
@@ -6561,7 +6603,7 @@ export class ToolHandler {
           // HP fork (F6): a callable the query NAMED outranks a search root that
           // merely matched (every method of a named class is an entry point), so
           // its body wins the file's reservation — see `reserveNamedBodies`.
-          else if (namedCallableFirst && NAMED_CALLABLE_KINDS.has(n.kind) && flow.namedNodeIds.has(n.id)) importance = NAMED_CALLABLE_IMPORTANCE;
+          else if (namedCallableFirst && ((NAMED_CALLABLE_KINDS.has(n.kind) && flow.namedNodeIds.has(n.id)) || namedCtorIds.has(n.id))) importance = NAMED_CALLABLE_IMPORTANCE;
           else if (entryNodeIds.has(n.id)) importance = 10;
           else if (flow.namedNodeIds.has(n.id)) importance = 9; // agent named it → keep its cluster
           else if (glueNodeIds.has(n.id)) importance = 6; // bridging caller/callee of an entry
@@ -7110,7 +7152,12 @@ export class ToolHandler {
         // A spine cluster (the rendered call path) is the flow answer — it may run
         // past the per-file budget up to the spine ceiling; non-spine clusters obey
         // the normal per-file budget.
-        const cap = rc.c.hasSpine || rc.c.maxImportance >= EXACT_IMPORTANCE ? SPINE_CEILING : fileBudget;
+        // HP fork (F7, `CODEGRAPH_EXPLORE_NAMED_WHOLE`): a cluster holding a callable
+        // the query named gets the spine's ceiling too. Held to `fileBudget`, it
+        // was windowed on its focus lines and the named body lost its middle
+        // (gin `handleHTTPRequest` 754-771, read back in the F6 sessions).
+        const namedWhole = namedWholeOn && rc.c.maxImportance >= NAMED_CALLABLE_IMPORTANCE;
+        const cap = rc.c.hasSpine || rc.c.maxImportance >= EXACT_IMPORTANCE || namedWhole ? SPINE_CEILING : fileBudget;
         // CG-30: shrinking keeps the top member whole however big it is, so bound
         // how far that member may overshoot — the same 1.5x-of-reservation bound
         // SPINE_CEILING already draws, never below `cap` (a cluster that fits its

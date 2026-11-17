@@ -173,6 +173,26 @@ export function namedTypesTierEnabled(env: NodeJS.ProcessEnv = process.env): boo
   return switchOn(env.CODEGRAPH_EXPLORE_NAMED_TYPES);
 }
 
+/**
+ * F7 switches (each default on, `=0` restores hp-tfg-v2). Evidence:
+ * knowledge-base/F7/00-diagnostico-reads.md — the Reads left after explore in
+ * the F6 level-2 sessions.
+ *   CODEGRAPH_EXPLORE_LOWER_TYPES  camelCase tokens naming a type are type tokens (Go `jsonBinding`)
+ *   CODEGRAPH_EXPLORE_NAMED_CTORS  the constructor of a named class is a named callable
+ *   CODEGRAPH_EXPLORE_NAMED_WHOLE  a named callable's cluster may run to the spine ceiling
+ */
+export function lowerTypesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return switchOn(env.CODEGRAPH_EXPLORE_LOWER_TYPES);
+}
+
+export function namedCtorsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return switchOn(env.CODEGRAPH_EXPLORE_NAMED_CTORS);
+}
+
+export function namedWholeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return switchOn(env.CODEGRAPH_EXPLORE_NAMED_WHOLE);
+}
+
 export function focusMetaEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return switchOn(env.CODEGRAPH_EXPLORE_FOCUS_META);
 }
