@@ -17,7 +17,7 @@
  * tools (node/search/callers/…) stay defined and are re-enablable via
  * CODEGRAPH_MCP_TOOLS, but they are NOT listed to agents, so don't name them.
  */
-export const SERVER_INSTRUCTIONS = `# Codegraph — code intelligence over an indexed knowledge graph
+export const SERVER_INSTRUCTIONS_FULL = `# Codegraph — code intelligence over an indexed knowledge graph
 
 Codegraph is a SQLite knowledge graph of every symbol, edge, and file in
 the workspace — pre-computed structure you would otherwise re-derive by
@@ -76,6 +76,66 @@ calls; a grep/read exploration is dozens.
 - Cross-file resolution is best-effort name matching; ambiguous calls may return multiple candidates.
 - No live correctness validation — that's still the TypeScript compiler / test suite / linter's job. Codegraph supplements those with structural context they don't have.
 `;
+
+/**
+ * Compact playbook (HP fork, F6) — the default. Same guidance as
+ * {@link SERVER_INSTRUCTIONS_FULL} in roughly half the tokens: this text is
+ * fresh (uncached) input at the start of EVERY session, so each line is paid
+ * for whether or not the session ever meets the case it describes. What was
+ * cut is what the tool's own responses already say at the moment it applies —
+ * the staleness / drift / auto-sync banners spell out which files to Read, and
+ * a cross-call back-reference says the source was already sent — plus the
+ * restatements of "one call, verbatim source". `CODEGRAPH_COMPACT_INSTRUCTIONS=0`
+ * restores the upstream text.
+ */
+export const SERVER_INSTRUCTIONS_COMPACT = `# Codegraph — code intelligence over an indexed knowledge graph
+
+Codegraph is a pre-built SQLite graph of every symbol, edge, and file in the
+workspace (30+ languages — don't assume a language here isn't covered). Reach
+for it BEFORE *and* while writing or editing code, not just for questions: one
+call returns the verbatim source PLUS who calls it and what it affects — more
+accurate context, in far fewer tokens and round-trips than reading files
+yourself.
+
+## One tool: codegraph_explore — use it instead of reading files
+
+\`codegraph_explore\` is Read-equivalent. It takes a natural-language question
+or a bag of symbol/file names and returns the **verbatim, line-numbered
+source** of the relevant symbols grouped by file (the \`<n>\\t<line>\` shape
+\`Read\` gives you, safe to \`Edit\` from), the call path among them (including
+dynamic-dispatch hops grep can't follow) and a blast-radius summary.
+
+Call it before you Read, whether you're answering "how does X work" or
+implementing a change. ONE call usually answers the whole question; running
+your own grep + read loop, or delegating the lookup to a file-reading
+sub-task/agent, repeats work codegraph already did and costs more.
+
+## How to query
+
+- **Almost any question** ("how does X work", architecture, a bug, "what/where is X") → a natural-language question or the relevant names.
+- **A flow — "how does X reach Y"** → name the symbols that span it (e.g. \`mutateElement renderScene\`); the call path among them comes back with their source.
+- **A file or symbol you can name** → put its name or path in the query instead of Reading it; an overloaded name returns every matching definition. Qualified names accept dots, \`::\`, or slashes.
+- **Need more?** Call \`codegraph_explore\` again with more specific names — treat the source it returns as already Read. Extra calls are never rejected or rate-limited.
+- Matching is lexical, not by meaning, and flow endpoints need exact names; a response that reports a missing symbol suggests names to retry with.
+
+## Anti-patterns
+
+- **Don't re-verify codegraph's results with grep** — they come from a full AST parse.
+- **Don't grep or Read first** to find or understand indexed code. Use raw \`Read\`/\`Grep\` only to confirm a specific detail codegraph didn't cover, or for what it doesn't index (configs, docs).
+- **Don't reconstruct a flow by hand** — name the endpoints in one \`codegraph_explore\`.
+- **Heed ⚠️ notices.** A response that opens with a ⚠️ banner, or flags a file as changed on disk, names the files whose index entry may be stale: Read those specific files. Everything not flagged is fresh — keep trusting it.
+
+## Limitations
+
+- If a tool reports a project isn't indexed (no \`.codegraph/\`), stop calling codegraph tools for that project for the rest of the session and use your built-in tools there. Indexing is the user's decision (\`codegraph init\`) — don't run it yourself.
+- The index lags file writes by ~1 second; cross-file resolution is best-effort name matching; it does not validate correctness — the compiler, tests and linter still do.
+`;
+
+/** What `initialize` sends for an indexed root: the compact playbook unless switched off. */
+export const SERVER_INSTRUCTIONS = process.env.CODEGRAPH_COMPACT_INSTRUCTIONS === '0'
+  || process.env.CODEGRAPH_COMPACT_INSTRUCTIONS === 'false'
+  ? SERVER_INSTRUCTIONS_FULL
+  : SERVER_INSTRUCTIONS_COMPACT;
 
 /**
  * Instructions variant sent when the server's own root has NO codegraph index.

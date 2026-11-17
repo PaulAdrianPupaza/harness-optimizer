@@ -6,7 +6,7 @@
 
 import {
   adaptBudgetToFlow, applyExploreBudgetPolicy, blastRadiusFileCaps, compactRelationships, compactRelationshipsEnabled,
-  definitionHeaderSymbols, explorePeripheralSkeletonEnabled, focusMetaEnabled, focusRelationshipEdges,
+  definitionHeaderSymbols, definitionRefs, explorePeripheralSkeletonEnabled, namedTypesTierEnabled, focusMetaEnabled, focusRelationshipEdges,
   NAMED_BODY_MAX_CHARS, namedBodiesEnabled, reserveNamedBodies, stripCarriageReturns,
 } from './explore-budget-policy';
 import type CodeGraph from '../index';
@@ -4374,6 +4374,14 @@ export class ToolHandler {
     // Files declaring a TYPE the query named by name — the counter-case guard
     // for the declaration-only penalty (CG-28). Populated in the token loop.
     const namedTypeFiles = new Set<string>();
+    // HP fork (F6, `CODEGRAPH_EXPLORE_NAMED_TYPES`): files that define a CLASS or
+    // STRUCT the query named exactly (<= 3 defs). Agents name the class that owns
+    // the flow (`MainThreadDocuments`, `RPCProtocol`) and, as a class is not a
+    // seedable kind, its file never reached the named-first tier — on vscode-04
+    // `mainThreadDocuments.ts` ranked #13 behind three files tiered by an
+    // uncorroborated guess at an overloaded member name.
+    const namedTypesOn = namedTypesTierEnabled();
+    const namedClassFiles = new Set<string>();
     {
       const FILE_EXT = /\.(?:java|kt|kts|ts|tsx|js|jsx|mjs|cjs|cs|py|go|rb|php|swift|rs|cpp|cc|cxx|c|h|hpp|scala|lua|dart|vue|svelte|astro|erl|hrl)$/i;
       const CALLABLE = new Set(['method', 'function', 'component', 'constructor']);
@@ -4472,6 +4480,10 @@ export class ToolHandler {
             }
           }
         }
+        if (namedTypesOn && !isQual && /^[A-Z]/.test(t)) {
+          const classes = raw.filter((n) => (n.kind === 'class' || n.kind === 'struct') && n.name === t && !isTestPath(n.filePath));
+          if (classes.length >= 1 && classes.length <= 3) for (const c of classes) namedClassFiles.add(c.filePath);
+        }
         let cands = raw
           .filter((n) => SEEDABLE.has(n.kind) && !isTestPath(n.filePath))
           .sort((a, b) => (bodyLines(b) > 1 ? 1 : 0) - (bodyLines(a) > 1 ? 1 : 0) || bodyLines(b) - bodyLines(a));
@@ -4532,7 +4544,11 @@ export class ToolHandler {
         } else {
           const ctx = cands.filter(inNamedContext);
           picks = ctx.length > 0 ? ctx.slice(0, 4) : cands.slice(0, 1);
-          tierPicks = picks; // corroborated overloads (or the single fallback) all earn it
+          // Corroborated overloads all earn the tier. The single fallback is a
+          // GUESS among > 3 namesakes (vscode's `onDidChangeContent` picked
+          // `workingCopy.ts`): in the HP fork it still seeds, but no longer
+          // jumps the named-first sort (F6, `CODEGRAPH_EXPLORE_NAMED_TYPES`).
+          tierPicks = ctx.length > 0 || !namedTypesOn ? picks : [];
         }
         for (const n of picks) {
           if (!subgraph.nodes.has(n.id)) subgraph.nodes.set(n.id, n);
@@ -4991,6 +5007,8 @@ export class ToolHandler {
     // buried-rescue pass) is the lexically-dissimilar answer; give it the named
     // tier so it isn't buried under files that merely share surface words (#1064).
     for (const fp of changeSurfaceFiles) namedSeedFiles.add(fp);
+    // HP fork (F6): a file defining a class the query named is asked for by name.
+    for (const fp of namedClassFiles) if (fileGroups.has(fp)) namedSeedFiles.add(fp);
 
     // Multi-term corroboration tier: a file that is BOTH (a) an entry/central file
     // (a search root, named seed, or graph-central hub — i.e. structurally part of
@@ -5149,7 +5167,11 @@ export class ToolHandler {
     // HP fork (F4): the ceiling policy runs once the query's exact targets are
     // known — a qualified name or line anchor asks for a WHOLE body, so those
     // calls keep the upstream ceiling.
-    budget = applyExploreBudgetPolicy(budget, process.env, { exactTargets: exactNodeIds.size > 0 || lineAnchors.length > 0 });
+    budget = applyExploreBudgetPolicy(budget, process.env, {
+      exactTargets: exactNodeIds.size > 0 || lineAnchors.length > 0,
+      lineAnchors: lineAnchors.length > 0,
+      fileCount: indexedFileCount,
+    });
     budget = adaptBudgetToFlow(budget, flow.pathNodeIds.size);
 
     // The symbols the question is about: exact targets, the named ones, the spine.
@@ -5239,38 +5261,63 @@ export class ToolHandler {
     // peers gets a third of it and its named 70-line method renders as a gap —
     // which is where the agent's follow-up Read lands. Same total, re-split.
     if (namedBodiesEnabled() && allocation.allowances.size > 1) {
-      const spans = new Map<string, Array<{ start: number; end: number }>>();
-      for (const id of new Set([...exactNodeIds, ...flow.namedNodeIds, ...flow.pathNodeIds])) {
-        const n = subgraph.nodes.get(id) ?? cg.getNode(id);
-        if (!n || !NAMED_CALLABLE_KINDS.has(n.kind) || !allocation.allowances.has(n.filePath)) continue;
-        if (!(n.startLine > 0 && n.endLine >= n.startLine)) continue;
-        const list = spans.get(n.filePath) ?? [];
-        list.push({ start: n.startLine, end: n.endLine });
-        spans.set(n.filePath, list);
-      }
-      const needs = new Map<string, number>();
-      for (const [fp, list] of spans) {
+      // Three tiers, most certain first, each re-split protecting the one before:
+      // the exact targets and the flow spine (the answer as asked), then names
+      // that resolve to ONE definition, then every definition of a named
+      // callable. Served together, an overloaded name (vscode's `writeFile` has
+      // 18 implementations) spreads the surplus over all of them pro rata and
+      // the body the agent qualified — `FileService.writeFile` — stays windowed.
+      const tiers: Array<Set<string>> = [
+        new Set([...exactNodeIds, ...flow.pathNodeIds]),
+        new Set([...exactNodeIds, ...flow.pathNodeIds, ...flow.uniqueNamedNodeIds]),
+        new Set([...exactNodeIds, ...flow.pathNodeIds, ...flow.uniqueNamedNodeIds, ...flow.namedNodeIds]),
+      ];
+      const srcCache = new Map<string, string[] | null>();
+      const sourceLinesOf = (fp: string): string[] | null => {
+        if (srcCache.has(fp)) return srcCache.get(fp)!;
+        let out: string[] | null = null;
         const abs = validatePathWithinRoot(projectRoot, fp);
-        if (!abs || !existsSync(abs)) continue;
-        let srcLines: string[];
-        try { srcLines = stripCarriageReturns(readFileSync(abs, 'utf-8')).split('\n'); } catch { continue; }
-        // Rendered cost of each body (line numbers + 3 lines of padding each side,
-        // as the cluster path renders it), capped per body; overlapping bodies
-        // (a method inside a named function) are counted once.
-        const seen = new Set<number>();
-        let need = 0;
-        for (const { start, end } of list.sort((a, b) => a.start - b.start)) {
-          let body = 0;
-          for (let ln = Math.max(1, start - 3); ln <= Math.min(srcLines.length, end + 3); ln++) {
-            if (seen.has(ln)) continue;
-            seen.add(ln);
-            body += (srcLines[ln - 1] ?? '').length + String(ln).length + 2;
-          }
-          need += Math.min(body, NAMED_BODY_MAX_CHARS);
+        if (abs && existsSync(abs)) {
+          try { out = stripCarriageReturns(readFileSync(abs, 'utf-8')).split('\n'); } catch { out = null; }
         }
-        needs.set(fp, need);
-      }
-      if (needs.size > 0) {
+        srcCache.set(fp, out);
+        return out;
+      };
+      let previous = '';
+      for (const ids of tiers) {
+        const key = [...ids].sort().join('|');
+        if (key === previous) continue;
+        previous = key;
+        const spans = new Map<string, Array<{ start: number; end: number }>>();
+        for (const id of ids) {
+          const n = subgraph.nodes.get(id) ?? cg.getNode(id);
+          if (!n || !NAMED_CALLABLE_KINDS.has(n.kind) || !allocation.allowances.has(n.filePath)) continue;
+          if (!(n.startLine > 0 && n.endLine >= n.startLine)) continue;
+          const list = spans.get(n.filePath) ?? [];
+          list.push({ start: n.startLine, end: n.endLine });
+          spans.set(n.filePath, list);
+        }
+        const needs = new Map<string, number>();
+        for (const [fp, list] of spans) {
+          const srcLines = sourceLinesOf(fp);
+          if (!srcLines) continue;
+          // Rendered cost of each body (line numbers + 3 lines of padding each
+          // side, as the cluster path renders it), capped per body; overlapping
+          // bodies (a method inside a named function) are counted once.
+          const seen = new Set<number>();
+          let need = 0;
+          for (const { start, end } of list.sort((a, b) => a.start - b.start)) {
+            let body = 0;
+            for (let ln = Math.max(1, start - 3); ln <= Math.min(srcLines.length, end + 3); ln++) {
+              if (seen.has(ln)) continue;
+              seen.add(ln);
+              body += (srcLines[ln - 1] ?? '').length + String(ln).length + 2;
+            }
+            need += Math.min(body, NAMED_BODY_MAX_CHARS);
+          }
+          needs.set(fp, need);
+        }
+        if (needs.size === 0) continue;
         const resplit = reserveNamedBodies(allocation.allowances, needs, EXPLORE_ALLOCATION.MIN_CHARS);
         for (const [fp, n] of resplit) allocation.allowances.set(fp, n);
       }
@@ -7194,8 +7241,9 @@ export class ToolHandler {
       ): string => {
         // HP fork (F6): definitions only — edge lines are not symbols of the file.
         const headerSymbols = focusMetaEnabled() ? definitionHeaderSymbols(symbols) : symbols;
+        const headerElided = focusMetaEnabled() ? definitionRefs(elided) : elided;
         for (let cap = budget.maxSymbolsInFileHeader; ; cap--) {
-          const { shown, omitted } = biasHeaderSymbols(headerSymbols, elided, cap);
+          const { shown, omitted } = biasHeaderSymbols(headerSymbols, headerElided, cap);
           const header = fileSectionHeader(filePath, omitted > 0
             ? `${shown.join(', ')}, +${omitted} more`
             : shown.join(', '));

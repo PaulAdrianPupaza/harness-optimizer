@@ -25,23 +25,45 @@ const MIN_SCALE = 0.2;
  */
 export const DEFAULT_EXPLORE_BUDGET_SCALE = 0.6;
 
-export function exploreBudgetScale(env: NodeJS.ProcessEnv = process.env): number {
+/**
+ * Large-repo default (HP fork, F6): from this many indexed files up, the
+ * ceiling factor is {@link LARGE_REPO_EXPLORE_BUDGET_SCALE}. Replaying the
+ * explore queries of the 20 F5 agent sessions on vscode (bench/level1/
+ * replay_level1.py), 0.5 returned 12% fewer tokens than 0.6 with identical
+ * symbol/file recall and identical body coverage on every task, once
+ * `reserveNamedBodies` protects what the query named; 0.4 starts losing named
+ * bodies. On gin (110 files, already on the 13K tier) 0.5 loses a named body,
+ * so small repos keep 0.6.
+ */
+export const LARGE_REPO_FILE_COUNT = 5000;
+export const LARGE_REPO_EXPLORE_BUDGET_SCALE = 0.5;
+
+export function exploreBudgetScale(env: NodeJS.ProcessEnv = process.env, fileCount?: number): number {
+  const fallback = fileCount !== undefined && fileCount >= LARGE_REPO_FILE_COUNT && env.CODEGRAPH_EXPLORE_LARGE_REPO_SCALE !== '0'
+    ? LARGE_REPO_EXPLORE_BUDGET_SCALE
+    : DEFAULT_EXPLORE_BUDGET_SCALE;
   const raw = env.CODEGRAPH_EXPLORE_BUDGET_SCALE;
-  if (raw === undefined || raw.trim() === '') return DEFAULT_EXPLORE_BUDGET_SCALE;
+  if (raw === undefined || raw.trim() === '') return fallback;
   const v = Number(raw);
-  if (!Number.isFinite(v)) return DEFAULT_EXPLORE_BUDGET_SCALE;
+  if (!Number.isFinite(v)) return fallback;
   return Math.min(1, Math.max(MIN_SCALE, v));
 }
 
 export function applyExploreBudgetPolicy(
   budget: ExploreOutputBudget,
   env: NodeJS.ProcessEnv = process.env,
-  opts: { exactTargets?: boolean } = {},
+  opts: { exactTargets?: boolean; lineAnchors?: boolean; fileCount?: number } = {},
 ): ExploreOutputBudget {
   // A qualified name / line anchor is a request for a whole body: keep the
   // upstream ceiling for it (upstream's explore-exact-target contract).
-  if (opts.exactTargets) return budget;
-  const scale = exploreBudgetScale(env);
+  // F6 measured dropping the exemption for qualified names now that
+  // `reserveNamedBodies` reserves the exact body first: 17% fewer tokens on
+  // gin, but 4 of the 40 replayed F5 sessions lost body coverage (vscode-05's
+  // `FileService.writeFile` 65% -> 23%), so it stays opt-in:
+  // `CODEGRAPH_EXPLORE_EXACT_SCALED=1` scales qualified-name calls too.
+  const scaleExact = env.CODEGRAPH_EXPLORE_EXACT_SCALED === '1' && namedBodiesEnabled(env) && opts.lineAnchors === false;
+  if (opts.exactTargets && !scaleExact) return budget;
+  const scale = exploreBudgetScale(env, opts.fileCount);
   if (scale === 1) return budget;
   return {
     ...budget,
@@ -144,6 +166,11 @@ function switchOn(raw: string | undefined): boolean {
 
 export function namedBodiesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return switchOn(env.CODEGRAPH_EXPLORE_NAMED_BODIES);
+}
+
+/** Named-class files earn the named-first tier; uncorroborated overload guesses do not (F6). */
+export function namedTypesTierEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return switchOn(env.CODEGRAPH_EXPLORE_NAMED_TYPES);
 }
 
 export function focusMetaEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -249,6 +276,11 @@ const EDGE_KIND_LABEL = /\((calls|references|imports|exports|instantiates|extend
 export function definitionHeaderSymbols(symbols: readonly string[]): string[] {
   const defs = symbols.filter((s) => !EDGE_KIND_LABEL.test(s));
   return defs.length > 0 ? defs : [...symbols];
+}
+
+/** `definitionHeaderSymbols` for refs that carry their kind as a field (the elided-symbol list). */
+export function definitionRefs<T extends { kind: string }>(refs: readonly T[]): T[] {
+  return refs.filter((r) => !EDGE_KIND_LABEL.test(`(${r.kind})`));
 }
 
 /** Caller / test files listed per blast-radius entry (hp-tfg: 4 and 4). */
