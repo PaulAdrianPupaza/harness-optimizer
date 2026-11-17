@@ -36,6 +36,26 @@ Tests: `__tests__/explore-budget-policy.test.ts`. The upstream allocation suites
 `CODEGRAPH_EXPLORE_BUDGET_SCALE=1` in `__tests__/setup-home-sandbox.ts` (their fixtures are sized
 to the upstream ceilings).
 
+### F6 — spend the envelope on what the query asked for (branch `hp-tfg-v2`)
+
+Evidence: replay of the 52 explore queries real agents wrote in the F5 sessions
+(`bench/level1/replay_level1.py` in the outer repo), 40 paired sessions, gin + vscode. Each
+switch is default ON and `=0` restores `hp-tfg`.
+
+| Change | Switch | Files |
+|---|---|---|
+| Re-split the allocator's reservations so a file can hold the bodies of the callables the query named (tiers: exact + spine, unique names, all named defs); named callables outrank plain search roots inside a file | `CODEGRAPH_EXPLORE_NAMED_BODIES` | `src/mcp/explore-budget-policy.ts` (`reserveNamedBodies`), `src/mcp/tools.ts` |
+| Relationships limited to edges touching the question's symbols; file headers list definitions, not edge lines; blast radius lists 2 caller files + 1 test file | `CODEGRAPH_EXPLORE_FOCUS_META` | same |
+| Files defining a class/struct the query named earn the named-first tier; an uncorroborated guess among > 3 namesakes no longer does | `CODEGRAPH_EXPLORE_NAMED_TYPES` | `src/mcp/tools.ts` |
+| Ceiling factor 0.5 (instead of 0.6) from 5,000 indexed files | `CODEGRAPH_EXPLORE_LARGE_REPO_SCALE` | `src/mcp/explore-budget-policy.ts` |
+| Rendered source drops the `` of CRLF checkouts | `CODEGRAPH_EXPLORE_STRIP_CR` | same |
+| Compact `initialize` instructions (714 vs 1,512 tokens) | `CODEGRAPH_COMPACT_INSTRUCTIONS` | `src/mcp/server-instructions.ts` |
+| Opt-in: scale the ceiling for qualified-name calls too | `CODEGRAPH_EXPLORE_EXACT_SCALED=1` | `src/mcp/explore-budget-policy.ts` |
+
+Tests: `__tests__/explore-budget-policy.test.ts`, `__tests__/explore-named-bodies.test.ts`;
+`__tests__/explore-named-file-valve.test.ts` runs its saturated-response suite with
+`CODEGRAPH_EXPLORE_NAMED_BODIES=0` (it pins the hp-tfg allocation shape).
+
 ## Building on Windows
 
 ```bash
