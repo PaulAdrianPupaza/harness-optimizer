@@ -204,7 +204,15 @@ describe('a named file on a saturated response takes nothing a lower file is owe
   let p: Project;
   let r: Awaited<ReturnType<typeof explore>>;
 
+  // HP fork (F6): this suite pins the valve / CG-31 guard on the hp-tfg
+  // allocation shape, where the lower file keeps a reservation above the floor.
+  // `reserveNamedBodies` deliberately moves that reservation to the named
+  // bodies (down to MIN_CHARS, never below — pinned in explore-budget-policy
+  // tests), which removes the precondition, so it is switched off here.
+  let prevNamedBodies: string | undefined;
   beforeAll(async () => {
+    prevNamedBodies = process.env.CODEGRAPH_EXPLORE_NAMED_BODIES;
+    process.env.CODEGRAPH_EXPLORE_NAMED_BODIES = '0';
     const files: Record<string, string> = { [NAMED_FILE]: querySource(), [LOWER]: listFilterSource() };
     // Into the >=500-file tier: at 13K the ceiling sits 50% over the budget
     // and a lower file always has room; at 24K it sits 4% over, as on django.
@@ -212,7 +220,11 @@ describe('a named file on a saturated response takes nothing a lower file is owe
     p = await buildProject(files);
     r = await explore(p, METHODS.map((m) => `QuerySet.${m}`).join(' '));
   }, 120_000);
-  afterAll(() => destroyProject(p));
+  afterAll(() => {
+    if (prevNamedBodies === undefined) delete process.env.CODEGRAPH_EXPLORE_NAMED_BODIES;
+    else process.env.CODEGRAPH_EXPLORE_NAMED_BODIES = prevNamedBodies;
+    destroyProject(p);
+  });
 
   it('fixture shape: the 24K tier, a lower file with a reservation', () => {
     expect(r.report.budget.maxOutputChars).toBe(24000);
