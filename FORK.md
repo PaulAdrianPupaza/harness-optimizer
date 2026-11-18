@@ -56,6 +56,21 @@ Tests: `__tests__/explore-budget-policy.test.ts`, `__tests__/explore-named-bodie
 `__tests__/explore-named-file-valve.test.ts` runs its saturated-response suite with
 `CODEGRAPH_EXPLORE_NAMED_BODIES=0` (it pins the hp-tfg allocation shape).
 
+### F7 — anticipate the Reads agents still made after explore (branch `hp-tfg-v3`)
+
+Evidence: the Reads made after `codegraph_explore` in the 80 F6 level-2 sessions, replayed
+(`bench/level1/replay_level1.py --queries bench/tasks/replay_queries_f6.json` in the outer repo).
+vs `hp-tfg-v2`: GT body coverage +5.2% (p=0.007), lines the agent later Read already shown
+237 → 576 of 2,421, symbol/file recall unchanged in 80/80, tokens +0.6%.
+
+| Change | Switch | Default |
+|---|---|---|
+| A camelCase token that names a type exactly is a type token (Go's unexported `jsonBinding`); a token no longer counts as its own context; a named class the query singles out (it does not name 3+ distinct classes sharing one of its supertypes) is spared the polymorphic-sibling skeleton | `CODEGRAPH_EXPLORE_LOWER_TYPES` | on (`=0` = hp-tfg-v2) |
+| The constructor of a named class joins the named-body reservation when no method of the class is named and it calls something the query named | `CODEGRAPH_EXPLORE_NAMED_CTORS` | opt-in (`=1`): no measured effect |
+| A named callable's cluster may exceed the per-file budget by what its named bodies need | `CODEGRAPH_EXPLORE_NAMED_WHOLE` | opt-in (`=1`): no measured effect |
+
+Tests: `__tests__/explore-f7-named-types.test.ts`, `__tests__/explore-budget-policy.test.ts`.
+
 ## Building on Windows
 
 ```bash
