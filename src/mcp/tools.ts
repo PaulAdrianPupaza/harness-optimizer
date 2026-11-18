@@ -4604,10 +4604,12 @@ export class ToolHandler {
     }
 
     // HP fork (F7, LOWER_TYPES): files whose named class the query SINGLED OUT —
-    // no other class it named shares that class's supertype. These are spared the
+    // the query did not list that class's family, i.e. name 3+ distinct classes
+    // (MIN_SIBLINGS) sharing one of its supertypes. These are spared the
     // polymorphic-sibling skeleton below ("jsonBinding Bind" picks one of gin's 13
-    // bindings); naming four sibling interceptors singles none out, so they still
-    // collapse to signatures (upstream's sibling-skeleton contract).
+    // bindings; vscode's ModelTracker and MainThreadDocuments merely share
+    // `Disposable`); naming four sibling interceptors lists the family, so they
+    // still collapse to signatures (upstream's sibling-skeleton contract).
     const singledOutClassFiles = new Set<string>();
     if (lowerTypesEnabled() && namedClassNodes.length > 0) {
       const supersOf = new Map<string, Set<string>>();
@@ -4617,9 +4619,9 @@ export class ToolHandler {
         supersOf.set(c.id, new Set(out.filter((e) => e.kind === 'implements' || e.kind === 'extends').map((e) => e.target)));
       }
       for (const c of namedClassNodes) {
-        const mine = supersOf.get(c.id)!;
-        const shared = namedClassNodes.some((o) => o.id !== c.id && [...supersOf.get(o.id)!].some((t) => mine.has(t)));
-        if (!shared) singledOutClassFiles.add(c.filePath);
+        const listed = [...supersOf.get(c.id)!].some((t) => new Set(namedClassNodes
+          .filter((o) => supersOf.get(o.id)!.has(t)).map((o) => o.name)).size >= 3);
+        if (!listed) singledOutClassFiles.add(c.filePath);
       }
     }
 
