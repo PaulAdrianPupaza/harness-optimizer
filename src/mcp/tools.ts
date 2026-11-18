@@ -4608,13 +4608,15 @@ export class ToolHandler {
     // `onDidChangeContent` → `$acceptModelChanged` listener there), so it is
     // reserved and ranked like a named callable.
     const namedCtorIds = new Set<string>();
+    /** constructor id → its class, to tell below whether the query also named a method of it. */
+    const ctorClass = new Map<string, Node>();
     if (namedCtorsEnabled()) {
       for (const cls of namedClassNodes) {
         let inFile: Node[] = [];
         try { inFile = cg.getNodesInFile(cls.filePath); } catch { /* no ctor then */ }
         for (const n of inFile) {
           const isCtor = n.kind === 'method' && (n.name === 'constructor' || n.name === '__init__' || n.name === cls.name);
-          if (isCtor && n.startLine >= cls.startLine && n.endLine <= cls.endLine) namedCtorIds.add(n.id);
+          if (isCtor && n.startLine >= cls.startLine && n.endLine <= cls.endLine) { namedCtorIds.add(n.id); ctorClass.set(n.id, cls); }
         }
       }
     }
@@ -5151,6 +5153,22 @@ export class ToolHandler {
     // is synchronous, so the grammars it needs are loaded here, once.
     await warmBranchGuardGrammars();
     const flow = this.buildFlowFromNamedSymbols(cg, matchQuery);
+    // HP fork (F7): a named class's constructor stands in for the class only when
+    // the query named none of its methods. "ExtHostLanguageFeatures
+    // provideCompletionItems …" asks for that method; reserving the constructor
+    // too took the bytes of the next named body (vscode-03 `provideSuggestionItems`
+    // 0.89 → 0.73 in the F7 replay ablation).
+    const ctorsWanted = new Set([...namedCtorIds].filter((id) => {
+      const cls = ctorClass.get(id);
+      if (!cls) return false;
+      for (const nid of flow.namedNodeIds) {
+        if (nid === id) continue;
+        const n = subgraph.nodes.get(nid) ?? cg.getNode(nid);
+        if (n && n.filePath === cls.filePath && n.startLine >= cls.startLine && n.endLine <= cls.endLine
+          && NAMED_CALLABLE_KINDS.has(n.kind)) return false;
+      }
+      return true;
+    }));
 
     // Relationship map — show how symbols connect
     const allSignificantEdges = subgraph.edges.filter(e =>
@@ -5306,8 +5324,8 @@ export class ToolHandler {
       // the body the agent qualified — `FileService.writeFile` — stays windowed.
       const tiers: Array<Set<string>> = [
         new Set([...exactNodeIds, ...flow.pathNodeIds]),
-        new Set([...exactNodeIds, ...flow.pathNodeIds, ...flow.uniqueNamedNodeIds, ...namedCtorIds]),
-        new Set([...exactNodeIds, ...flow.pathNodeIds, ...flow.uniqueNamedNodeIds, ...namedCtorIds, ...flow.namedNodeIds]),
+        new Set([...exactNodeIds, ...flow.pathNodeIds, ...flow.uniqueNamedNodeIds]),
+        new Set([...exactNodeIds, ...flow.pathNodeIds, ...flow.uniqueNamedNodeIds, ...flow.namedNodeIds, ...ctorsWanted]),
       ];
       const srcCache = new Map<string, string[] | null>();
       const sourceLinesOf = (fp: string): string[] | null => {
@@ -6580,7 +6598,7 @@ export class ToolHandler {
       // budget — the agent explicitly asked for these symbols.
       const rangeNodes = new Map<string, Node>();
       for (const n of group.nodes) if (n.startLine > 0 && n.endLine > 0) rangeNodes.set(n.id, n);
-      for (const id of [...flow.namedNodeIds, ...exactNodeIds, ...namedCtorIds]) {
+      for (const id of [...flow.namedNodeIds, ...exactNodeIds, ...ctorsWanted]) {
         if (rangeNodes.has(id)) continue;
         const n = cg.getNode(id);
         if (n && n.filePath === filePath && n.startLine > 0 && n.endLine > 0) rangeNodes.set(id, n);
@@ -6603,7 +6621,7 @@ export class ToolHandler {
           // HP fork (F6): a callable the query NAMED outranks a search root that
           // merely matched (every method of a named class is an entry point), so
           // its body wins the file's reservation — see `reserveNamedBodies`.
-          else if (namedCallableFirst && ((NAMED_CALLABLE_KINDS.has(n.kind) && flow.namedNodeIds.has(n.id)) || namedCtorIds.has(n.id))) importance = NAMED_CALLABLE_IMPORTANCE;
+          else if (namedCallableFirst && ((NAMED_CALLABLE_KINDS.has(n.kind) && flow.namedNodeIds.has(n.id)) || ctorsWanted.has(n.id))) importance = NAMED_CALLABLE_IMPORTANCE;
           else if (entryNodeIds.has(n.id)) importance = 10;
           else if (flow.namedNodeIds.has(n.id)) importance = 9; // agent named it → keep its cluster
           else if (glueNodeIds.has(n.id)) importance = 6; // bridging caller/callee of an entry
