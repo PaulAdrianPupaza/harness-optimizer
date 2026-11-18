@@ -350,7 +350,6 @@ describe('F6/F7 switches', () => {
     ['CODEGRAPH_EXPLORE_NAMED_TYPES', namedTypesTierEnabled],
     // F7
     ['CODEGRAPH_EXPLORE_LOWER_TYPES', lowerTypesEnabled],
-    ['CODEGRAPH_EXPLORE_NAMED_WHOLE', namedWholeEnabled],
   ];
 
   it.each(switches)('%s: on when unset, off at 0/false, on at 1', (name, enabled) => {
@@ -367,11 +366,14 @@ describe('F6/F7 switches', () => {
     }
   });
 
-  it('CODEGRAPH_EXPLORE_NAMED_CTORS is opt-in (no measured win in the F7 replay)', () => {
-    expect(namedCtorsEnabled({})).toBe(false);
-    expect(namedCtorsEnabled({ CODEGRAPH_EXPLORE_NAMED_CTORS: '0' })).toBe(false);
-    expect(namedCtorsEnabled({ CODEGRAPH_EXPLORE_NAMED_CTORS: '1' })).toBe(true);
-    expect(namedCtorsEnabled({ CODEGRAPH_EXPLORE_NAMED_CTORS: 'true' })).toBe(true);
+  it.each([
+    ['CODEGRAPH_EXPLORE_NAMED_CTORS', namedCtorsEnabled],
+    ['CODEGRAPH_EXPLORE_NAMED_WHOLE', namedWholeEnabled],
+  ] as Array<[string, (env: NodeJS.ProcessEnv) => boolean]>)('%s is opt-in (no measured win in the F7 replay)', (name, enabled) => {
+    expect(enabled({})).toBe(false);
+    expect(enabled({ [name]: '0' })).toBe(false);
+    expect(enabled({ [name]: '1' })).toBe(true);
+    expect(enabled({ [name]: 'true' })).toBe(true);
   });
 });
 

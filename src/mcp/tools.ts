@@ -7214,6 +7214,7 @@ export class ToolHandler {
         // windowed on its focus lines and the named body lost its middle (gin
         // `handleHTTPRequest` 754-771, read back in the F6 sessions). Only that much:
         // the whole ceiling went to unnamed neighbours and starved the gap names.
+        // Opt-in (`=1`): bounded this way it changed none of the 120 replayed sessions.
         const namedWhole = namedWholeOn && rc.c.maxImportance >= NAMED_CALLABLE_IMPORTANCE
           && rc.c.maxImportance < EXACT_IMPORTANCE && !rc.c.hasSpine;
         const namedNeed = namedWhole

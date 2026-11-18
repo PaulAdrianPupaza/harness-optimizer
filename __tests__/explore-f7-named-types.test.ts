@@ -5,6 +5,8 @@
  *   CODEGRAPH_EXPLORE_LOWER_TYPES  a camelCase token that names a type is a type token. Go's
  *                                  unexported `jsonBinding` must pick `jsonBinding.Bind` out of
  *                                  a family of `Bind`s and bring its file whole (gin-04).
+ *   CODEGRAPH_EXPLORE_NAMED_WHOLE  (opt-in, `=1`) a named callable's cluster may exceed the
+ *                                  per-file budget by what its named bodies need.
  *   CODEGRAPH_EXPLORE_NAMED_CTORS  (opt-in, `=1`) the constructor of a class the query named is
  *                                  reserved like a named callable when it calls something else the
  *                                  query named (vscode-04: `ModelTracker`'s constructor wires the
