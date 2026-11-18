@@ -5,9 +5,10 @@
  *   CODEGRAPH_EXPLORE_LOWER_TYPES  a camelCase token that names a type is a type token. Go's
  *                                  unexported `jsonBinding` must pick `jsonBinding.Bind` out of
  *                                  a family of `Bind`s and bring its file whole (gin-04).
- *   CODEGRAPH_EXPLORE_NAMED_CTORS  the constructor of a class the query named is reserved like a
- *                                  named callable (vscode-04: `ModelTracker`'s constructor wires
- *                                  the listener the question is about).
+ *   CODEGRAPH_EXPLORE_NAMED_CTORS  (opt-in, `=1`) the constructor of a class the query named is
+ *                                  reserved like a named callable when it calls something else the
+ *                                  query named (vscode-04: `ModelTracker`'s constructor wires the
+ *                                  listener the question is about).
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import * as fs from 'fs';
@@ -284,7 +285,8 @@ describe('explore — F7 named types and constructors', () => {
 
   const TS_QUERY = 'ModelTracker DocumentSync acceptModelChanged';
 
-  it('NAMED_CTORS: the constructor of a named class is rendered whole', async () => {
+  it('NAMED_CTORS=1: the constructor of a named class is rendered whole', async () => {
+    process.env.CODEGRAPH_EXPLORE_NAMED_CTORS = '1';
     const response = await explore(ts, TS_QUERY);
     const block = fileBlock(response, 'src/modelTracker.ts');
     expect(block.length, response.slice(0, 3000)).toBeGreaterThan(0);
@@ -293,8 +295,7 @@ describe('explore — F7 named types and constructors', () => {
     expect(ctor.filter((l) => !block.includes(l))).toEqual([]);
   });
 
-  it('NAMED_CTORS=0 still answers (hp-tfg-v2 behaviour)', async () => {
-    process.env.CODEGRAPH_EXPLORE_NAMED_CTORS = '0';
+  it('NAMED_CTORS unset (default) still answers (hp-tfg-v2 behaviour)', async () => {
     const response = await explore(ts, TS_QUERY);
     expect(fileBlock(response, 'src/modelTracker.ts').length).toBeGreaterThan(0);
   });

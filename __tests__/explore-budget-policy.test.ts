@@ -350,7 +350,6 @@ describe('F6/F7 switches', () => {
     ['CODEGRAPH_EXPLORE_NAMED_TYPES', namedTypesTierEnabled],
     // F7
     ['CODEGRAPH_EXPLORE_LOWER_TYPES', lowerTypesEnabled],
-    ['CODEGRAPH_EXPLORE_NAMED_CTORS', namedCtorsEnabled],
     ['CODEGRAPH_EXPLORE_NAMED_WHOLE', namedWholeEnabled],
   ];
 
@@ -366,6 +365,13 @@ describe('F6/F7 switches', () => {
       const others = Object.fromEntries(switches.filter(([n]) => n !== name).map(([n]) => [n, '0']));
       expect(enabled(others), name).toBe(true);
     }
+  });
+
+  it('CODEGRAPH_EXPLORE_NAMED_CTORS is opt-in (no measured win in the F7 replay)', () => {
+    expect(namedCtorsEnabled({})).toBe(false);
+    expect(namedCtorsEnabled({ CODEGRAPH_EXPLORE_NAMED_CTORS: '0' })).toBe(false);
+    expect(namedCtorsEnabled({ CODEGRAPH_EXPLORE_NAMED_CTORS: '1' })).toBe(true);
+    expect(namedCtorsEnabled({ CODEGRAPH_EXPLORE_NAMED_CTORS: 'true' })).toBe(true);
   });
 });
 

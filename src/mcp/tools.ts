@@ -4603,10 +4603,31 @@ export class ToolHandler {
       }
     }
 
+    // HP fork (F7, LOWER_TYPES): files whose named class the query SINGLED OUT —
+    // no other class it named shares that class's supertype. These are spared the
+    // polymorphic-sibling skeleton below ("jsonBinding Bind" picks one of gin's 13
+    // bindings); naming four sibling interceptors singles none out, so they still
+    // collapse to signatures (upstream's sibling-skeleton contract).
+    const singledOutClassFiles = new Set<string>();
+    if (lowerTypesEnabled() && namedClassNodes.length > 0) {
+      const supersOf = new Map<string, Set<string>>();
+      for (const c of namedClassNodes) {
+        let out: ReturnType<typeof cg.getOutgoingEdges> = [];
+        try { out = cg.getOutgoingEdges(c.id); } catch { /* none */ }
+        supersOf.set(c.id, new Set(out.filter((e) => e.kind === 'implements' || e.kind === 'extends').map((e) => e.target)));
+      }
+      for (const c of namedClassNodes) {
+        const mine = supersOf.get(c.id)!;
+        const shared = namedClassNodes.some((o) => o.id !== c.id && [...supersOf.get(o.id)!].some((t) => mine.has(t)));
+        if (!shared) singledOutClassFiles.add(c.filePath);
+      }
+    }
+
     // HP fork (F7): the constructor of a class the query named is where the class
     // wires itself into the flow (vscode's `ModelTracker` registers the
     // `onDidChangeContent` → `$acceptModelChanged` listener there), so it is
-    // reserved and ranked like a named callable.
+    // reserved and ranked like a named callable. Opt-in (`CODEGRAPH_EXPLORE_NAMED_CTORS=1`):
+    // with the guards below it changed none of the 80 replayed F6 sessions.
     const namedCtorIds = new Set<string>();
     /** constructor id → its class, to tell below whether the query also named a method of it. */
     const ctorClass = new Map<string, Node>();
@@ -6178,11 +6199,11 @@ export class ToolHandler {
           spine: flow.pathNodeIds.has(n.id),
           qualifiedName: n.qualifiedName,
         }));
-      // HP fork (F7, LOWER_TYPES): a file defining a type the query NAMED is spared
-      // too — the polymorphic-sibling skeleton reduced gin's `binding/json.go` to
-      // signatures right after the query singled out `jsonBinding` among 13 bindings.
+      // HP fork (F7, LOWER_TYPES): a file defining a type the query singled out is
+      // spared too — the polymorphic-sibling skeleton reduced gin's `binding/json.go`
+      // to signatures right after the query picked `jsonBinding` among 13 bindings.
       const spareNamed = group.nodes.some(n => flow.uniqueNamedNodeIds.has(n.id))
-        || (lowerTypesEnabled() && namedClassFiles.has(filePath));
+        || singledOutClassFiles.has(filePath);
       const fileDefinesSuper = definesPolymorphicSupertype(group.nodes);
       const spared = spareNamed && !fileDefinesSuper;
       const CALLABLE_BODY = new Set(['method', 'function', 'constructor', 'component']);
@@ -7186,11 +7207,18 @@ export class ToolHandler {
         // past the per-file budget up to the spine ceiling; non-spine clusters obey
         // the normal per-file budget.
         // HP fork (F7, `CODEGRAPH_EXPLORE_NAMED_WHOLE`): a cluster holding a callable
-        // the query named gets the spine's ceiling too. Held to `fileBudget`, it
-        // was windowed on its focus lines and the named body lost its middle
-        // (gin `handleHTTPRequest` 754-771, read back in the F6 sessions).
-        const namedWhole = namedWholeOn && rc.c.maxImportance >= NAMED_CALLABLE_IMPORTANCE;
-        const cap = rc.c.hasSpine || rc.c.maxImportance >= EXACT_IMPORTANCE || namedWhole ? SPINE_CEILING : fileBudget;
+        // the query named may run past `fileBudget` by as much as its named bodies
+        // need (never past the spine's ceiling). Held to `fileBudget`, it was
+        // windowed on its focus lines and the named body lost its middle (gin
+        // `handleHTTPRequest` 754-771, read back in the F6 sessions). Only that much:
+        // the whole ceiling went to unnamed neighbours and starved the gap names.
+        const namedWhole = namedWholeOn && rc.c.maxImportance >= NAMED_CALLABLE_IMPORTANCE
+          && rc.c.maxImportance < EXACT_IMPORTANCE && !rc.c.hasSpine;
+        const namedNeed = namedWhole
+          ? renderedSizeOfKept(rc.c.members.filter((m) => m.importance >= NAMED_CALLABLE_IMPORTANCE))
+          : 0;
+        const cap = rc.c.hasSpine || rc.c.maxImportance >= EXACT_IMPORTANCE ? SPINE_CEILING
+          : namedWhole ? Math.min(SPINE_CEILING, Math.max(fileBudget, namedNeed)) : fileBudget;
         // CG-30: shrinking keeps the top member whole however big it is, so bound
         // how far that member may overshoot — the same 1.5x-of-reservation bound
         // SPINE_CEILING already draws, never below `cap` (a cluster that fits its

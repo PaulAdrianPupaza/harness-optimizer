@@ -174,7 +174,9 @@ export function namedTypesTierEnabled(env: NodeJS.ProcessEnv = process.env): boo
 }
 
 /**
- * F7 switches (each default on, `=0` restores hp-tfg-v2). Evidence:
+ * F7 switches (LOWER_TYPES and NAMED_WHOLE default on, `=0` restores hp-tfg-v2;
+ * NAMED_CTORS is opt-in, `=1`: it changed none of the 80 replayed F6 sessions,
+ * so it has no measured win to justify being on). Evidence:
  * knowledge-base/F7/00-diagnostico-reads.md — the Reads left after explore in
  * the F6 level-2 sessions.
  *   CODEGRAPH_EXPLORE_LOWER_TYPES  camelCase tokens naming a type are type tokens (Go `jsonBinding`)
@@ -186,7 +188,8 @@ export function lowerTypesEnabled(env: NodeJS.ProcessEnv = process.env): boolean
 }
 
 export function namedCtorsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return switchOn(env.CODEGRAPH_EXPLORE_NAMED_CTORS);
+  const raw = env.CODEGRAPH_EXPLORE_NAMED_CTORS;
+  return raw === '1' || raw === 'true';
 }
 
 export function namedWholeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
