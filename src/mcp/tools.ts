@@ -5158,6 +5158,13 @@ export class ToolHandler {
     // provideCompletionItems …" asks for that method; reserving the constructor
     // too took the bytes of the next named body (vscode-03 `provideSuggestionItems`
     // 0.89 → 0.73 in the F7 replay ablation).
+    // And only when the constructor itself CALLS a function or method the query
+    // named: that is what makes it part of the asked flow (ModelTracker's calls
+    // `onDidChangeContent`). Without this test, naming
+    // two classes as orientation (vscode-01: "RPCProtocol … ExtensionHostManager")
+    // reserved two unrelated constructors and pushed `createProxyIdentifier` out.
+    // Names the query spelled, as identifiers (`$acceptModelChanged`, `onDidChangeContent`).
+    const queryNames = new Set(matchQuery.split(/[^\w$]+/).filter((t) => t.length >= 3));
     const ctorsWanted = new Set([...namedCtorIds].filter((id) => {
       const cls = ctorClass.get(id);
       if (!cls) return false;
@@ -5167,7 +5174,15 @@ export class ToolHandler {
         if (n && n.filePath === cls.filePath && n.startLine >= cls.startLine && n.endLine <= cls.endLine
           && NAMED_CALLABLE_KINDS.has(n.kind)) return false;
       }
-      return true;
+      let reaches = false;
+      try {
+        for (const e of cg.getOutgoingEdges(id)) {
+          if (e.kind !== 'calls') continue;
+          const t = subgraph.nodes.get(e.target) ?? cg.getNode(e.target);
+          if (t && NAMED_CALLABLE_KINDS.has(t.kind) && t.name !== cls.name && queryNames.has(t.name)) { reaches = true; break; }
+        }
+      } catch { /* no edges: not reached */ }
+      return reaches;
     }));
 
     // Relationship map — show how symbols connect
