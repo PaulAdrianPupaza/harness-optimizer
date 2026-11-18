@@ -48,7 +48,8 @@ switch is default ON and `=0` restores `hp-tfg`.
 | Relationships limited to edges touching the question's symbols; file headers list definitions, not edge lines; blast radius lists 2 caller files + 1 test file | `CODEGRAPH_EXPLORE_FOCUS_META` | same |
 | Files defining a class/struct the query named earn the named-first tier; an uncorroborated guess among > 3 namesakes no longer does | `CODEGRAPH_EXPLORE_NAMED_TYPES` | `src/mcp/tools.ts` |
 | Ceiling factor 0.5 (instead of 0.6) from 5,000 indexed files | `CODEGRAPH_EXPLORE_LARGE_REPO_SCALE` | `src/mcp/explore-budget-policy.ts` |
-| Rendered source drops the `` of CRLF checkouts | `CODEGRAPH_EXPLORE_STRIP_CR` | same |
+| Rendered source drops the `
+` of CRLF checkouts | `CODEGRAPH_EXPLORE_STRIP_CR` | same |
 | Compact `initialize` instructions (714 vs 1,512 tokens) | `CODEGRAPH_COMPACT_INSTRUCTIONS` | `src/mcp/server-instructions.ts` |
 | Opt-in: scale the ceiling for qualified-name calls too | `CODEGRAPH_EXPLORE_EXACT_SCALED=1` | `src/mcp/explore-budget-policy.ts` |
 
@@ -62,6 +63,8 @@ Evidence: the Reads made after `codegraph_explore` in the 80 F6 level-2 sessions
 (`bench/level1/replay_level1.py --queries bench/tasks/replay_queries_f6.json` in the outer repo).
 vs `hp-tfg-v2`: GT body coverage +5.2% (p=0.007), lines the agent later Read already shown
 237 → 576 of 2,421, symbol/file recall unchanged in 80/80, tokens +0.6%.
+Level 2 (60 agent sessions, v3 vs v2): no measurable difference (cost +2% p=0.75, or −4% p=0.31
+without two cold-prompt-cache pairs; Reads not reduced), so F7 is not claimed as a token saving.
 
 | Change | Switch | Default |
 |---|---|---|
